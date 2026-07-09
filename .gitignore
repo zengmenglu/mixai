@@ -1,0 +1,13 @@
+node_modules/
+
+# Persistent browser profiles hold live login sessions — never commit
+profiles/
+
+# Local, minimal credentials for semi-automatic login fill — never commit
+credentials.json
+.env
+.env.*
+
+# Logs / OS cruft
+*.log
+.DS_Store

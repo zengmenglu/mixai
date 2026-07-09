@@ -1,0 +1,17 @@
+{
+  "name": "mixai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local four-pane multi-model compare chat driven by browser automation (no API keys).",
+  "scripts": {
+    "start": "node backend/server.js",
+    "login": "node backend/login.js",
+    "login:one": "node backend/login.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "patchright": "^1.60.2",
+    "playwright": "^1.45.0"
+  }
+}

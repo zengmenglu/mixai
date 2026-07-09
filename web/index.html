@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mixai · 四模型对比</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>mixai</h1>
+    <span class="subtitle">DeepSeek · Doubao · Kimi · ChatGPT 同时对比</span>
+    <div class="spacer"></div>
+    <button id="newConvBtn" class="ghost">＋ 新会话</button>
+    <span id="conn" class="conn" title="连接状态">●</span>
+  </header>
+
+  <main id="grid" class="grid"><!-- panes injected by app.js --></main>
+
+  <form id="composer" class="composer">
+    <textarea id="input" rows="1" placeholder="输入一个问题，回车同时问四个模型（Shift+Enter 换行）"></textarea>
+    <button id="sendBtn" type="submit">发送</button>
+  </form>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
