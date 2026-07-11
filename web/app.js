@@ -79,8 +79,14 @@ function startTurn(p, question) {
 
 function connectSSE() {
   const es = new EventSource('/events');
-  es.onopen = () => conn.classList.add('live');
-  es.onerror = () => conn.classList.remove('live');
+  es.onopen = () => {
+    conn.classList.add('live');
+    hideToast();
+  };
+  es.onerror = () => {
+    conn.classList.remove('live');
+    showToast('连接断开，正在重连…');
+  };
   es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
@@ -94,21 +100,28 @@ function handleEvent(ev) {
     return;
   }
   const p = panes.get(ev.pane);
-  if (!p || !p.answerEl) return;
+  if (!p) return;
 
   if (ev.type === 'delta') {
+    if (!p.answerEl) return;
     p.answerEl.textContent += ev.text;
     p.transcript.scrollTop = p.transcript.scrollHeight;
   } else if (ev.type === 'status') {
     // On done, resync to the authoritative full text. Fixes a slow provider
     // (e.g. ChatGPT) that finished but whose deltas didn't paint.
-    if (ev.status === 'done' && typeof ev.full === 'string'
+    if (ev.status === 'done' && p.answerEl && typeof ev.full === 'string'
         && ev.full.length > p.answerEl.textContent.length) {
       p.answerEl.textContent = ev.full;
       p.transcript.scrollTop = p.transcript.scrollHeight;
     }
-    if (ev.status === 'error') {
+    if (ev.status === 'error' && p.answerEl) {
       p.answerEl.textContent = `（出错：${ev.message || '未知错误'}）`;
+    }
+    // Remove empty answer bubble when a provider is not logged in, so no blank
+    // bubble lingers in the transcript.
+    if (ev.status === 'logged-out' && p.answerEl) {
+      p.answerEl.closest('.turn')?.remove();
+      p.answerEl = null;
     }
     setStatus(ev.pane, ev.status);
     refreshSendState();
@@ -119,6 +132,30 @@ function refreshSendState() {
   const busy = anyBusy();
   sendBtn.disabled = busy;
   sendBtn.textContent = busy ? '回答中…' : '发送';
+}
+
+// ---- Toast (connection status) ----
+
+const toast = document.createElement('div');
+toast.id = 'toast';
+Object.assign(toast.style, {
+  position: 'fixed', bottom: '24px', right: '24px',
+  background: '#e74c3c', color: '#fff',
+  padding: '8px 18px', borderRadius: '8px',
+  fontSize: '13px', zIndex: '9999',
+  display: 'none', transition: 'opacity 0.3s',
+});
+document.body.appendChild(toast);
+let toastTimer = null;
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 4000);
+}
+function hideToast() {
+  toast.style.display = 'none';
+  clearTimeout(toastTimer);
 }
 
 function clearAll() {
