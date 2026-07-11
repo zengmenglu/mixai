@@ -1,5 +1,14 @@
 {
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true
-  }
+  },
+  "projectRules": [
+    ".claude/rules/general-basics.md",
+    ".claude/rules/javascript-node.md",
+    ".claude/rules/browser-automation.md",
+    ".claude/rules/mixai-project.md"
+  ],
+  "alwaysOnContext": [
+    ".claude/agents.md"
+  ]
 }
