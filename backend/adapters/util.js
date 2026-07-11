@@ -53,11 +53,14 @@ export async function typeInto(page, selectors, text) {
     await loc.click({ force: true }).catch(async () => { await loc.focus().catch(() => {}); });
   }
   await loc.fill('').catch(() => {});
-  // Prefer fill for speed/reliability; fall back to typing for editors that
-  // ignore fill (some Lexical/contenteditable widgets).
+  // Prefer fill for speed/reliability; fall back to type for editors that
+  // ignore fill (some Lexical/contenteditable widgets). inputValue() throws on
+  // non-input elements and returns '' for contenteditable — both cases trigger
+  // the type fallback.
   try {
     await loc.fill(text, { timeout: 2000 });
-    if (!(await loc.inputValue().catch(() => text))) throw new Error('fill no-op');
+    const val = await loc.inputValue().catch(() => null);
+    if (val === null || val === '') throw new Error('fill did not apply');
   } catch {
     await loc.type(text, { delay: 8 }).catch(() => {});
   }

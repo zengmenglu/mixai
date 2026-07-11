@@ -52,18 +52,26 @@ function stealthInitScript(level) {
   `;
 }
 
-/** Parse a proxy URL into Playwright's { server, username?, password? } shape. */
+/** Parse a proxy URL into Playwright's { server, username?, password? } shape.
+ *  Throws early on invalid input so the error is clear at config-load time. */
 function parseProxy(str) {
+  if (!str || typeof str !== 'string') {
+    throw new Error(`Invalid proxy: expected a URL string, got ${typeof str}`);
+  }
   try {
     const u = new URL(str);
+    if (!u.host) throw new Error('no host');
     const server = `${u.protocol}//${u.host}`;
     const out = { server };
     if (u.username) out.username = decodeURIComponent(u.username);
     if (u.password) out.password = decodeURIComponent(u.password);
     return out;
   } catch {
-    // Bare "host:port" — assume http.
-    return { server: `http://${str}` };
+    // Bare "host:port" — assume http, but validate basic shape.
+    if (/^[\w.-]+:\d+$/.test(str)) {
+      return { server: `http://${str}` };
+    }
+    throw new Error(`Invalid proxy format: "${str}". Expected URL (http://host:port) or host:port`);
   }
 }
 

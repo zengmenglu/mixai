@@ -7,7 +7,7 @@
 // require BOTH "text stable" AND "not streaming" so a mid-generation stall is
 // never mistaken for completion.
 
-const POLL_MS = 220;
+const POLL_MS = 150;
 
 /**
  * Stream incremental answer text from a response container.
@@ -33,6 +33,10 @@ export async function* streamAnswer({
 
   // Small grace period so we don't declare "done" before generation even starts.
   let sawAnyText = false;
+  // Consecutive readText failures: if the selector breaks mid-stream we fast-fail
+  // instead of spinning until maxMs.
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 20;
 
   while (true) {
     await page.waitForTimeout(POLL_MS);
@@ -40,7 +44,15 @@ export async function* streamAnswer({
     let current = '';
     try {
       current = (await readText()) || '';
+      consecutiveFailures = 0; // reset on success
     } catch {
+      consecutiveFailures++;
+      // If the selector worked before (we've seen text) but now fails
+      // repeatedly, it may have been removed from the DOM. Fast-fail.
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && sawAnyText) {
+        yield { type: 'done', full: last };
+        return;
+      }
       current = last; // transient DOM detach during re-render
     }
 
