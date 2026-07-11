@@ -17,6 +17,21 @@ export class Orchestrator {
     }
   }
 
+  /** Launch all provider browsers eagerly at startup. Fire-and-forget: failures are logged, never crash. */
+  async launchAll() {
+    const results = await Promise.allSettled(
+      this.adapters.map(async (a) => {
+        await a.launch();
+        hub.status(a.id, 'idle');
+      })
+    );
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'rejected') {
+        console.error(`[${this.adapters[i].id}] launch failed:`, results[i].reason?.message);
+      }
+    }
+  }
+
   /** Start a fresh conversation: next turn opens a new chat in every provider. */
   newConversation() {
     for (const p of this.panes.values()) p.started = false;

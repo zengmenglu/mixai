@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 class Hub {
   constructor() {
     this.bus = new EventEmitter();
-    this.bus.setMaxListeners(0);
+    this.bus.setMaxListeners(50); // reasonable ceiling (default 10 is too low for 4-pane fan-out)
   }
 
   /** Attach an SSE response. Returns a detach function. */

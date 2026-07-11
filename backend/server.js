@@ -53,6 +53,27 @@ app.post('/api/login/:id', async (req, res) => {
   runLogin([id]).catch((e) => hub.system(`login error: ${e}`));
 });
 
-app.listen(PORT, () => {
-  console.log(`\n  mixai → http://localhost:${PORT}\n`);
+// ---- Startup & shutdown ----
+
+// Launch browsers first, then start HTTP. This avoids the race where a request
+// arrives before launchAll completes.
+orchestrator.launchAll().then(() => {
+  app.listen(PORT, () => {
+    console.log(`\n  mixai → http://localhost:${PORT}\n`);
+  });
+}).catch((e) => {
+  console.error('launchAll error:', e);
+  // Still start the server so the UI is available for login recovery.
+  app.listen(PORT, () => {
+    console.log(`\n  mixai → http://localhost:${PORT} (browser launch had errors)\n`);
+  });
 });
+
+// Graceful shutdown: close all browser contexts so no zombie processes linger.
+async function shutdown() {
+  console.log('\nshutting down…');
+  await orchestrator.closeAll();
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
