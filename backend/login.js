@@ -1,16 +1,14 @@
 // Login / recovery flow.
 //
 // Opens a VISIBLE (headful, on-screen) browser per provider so the user can log
-// in. Where a password form + stored credentials exist, fields are pre-filled;
-// SMS codes, QR scans, and captcha/human-verification are ALWAYS left to the
-// user. The persistent context auto-saves the session to its userDataDir, so
-// login persists across runs.
+// in. SMS codes, QR scans, and captcha/human-verification are ALWAYS completed
+// by the user. The persistent context auto-saves the session to its userDataDir,
+// so login persists across runs.
 //
 // Usage:
 //   npm run login                 # all providers
 //   node backend/login.js kimi    # just one (or several) providers
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,39 +17,6 @@ import { createAdapter } from './adapters/index.js';
 import { hub } from './transport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CRED_PATH = path.resolve(__dirname, '..', 'credentials.json');
-
-/** Load local, minimal credentials if present (never required, never remote). */
-function loadCredentials(id) {
-  try {
-    const all = JSON.parse(fs.readFileSync(CRED_PATH, 'utf8'));
-    return all[id] || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Best-effort semi-automatic fill: only acts if a password form is present. */
-async function tryAutoFill(page, creds) {
-  if (!creds) return;
-  const userSel = ['input[name="username"]', 'input[type="email"]', 'input[autocomplete="username"]'];
-  const passSel = ['input[type="password"]', 'input[autocomplete="current-password"]'];
-  try {
-    for (const s of passSel) {
-      if (await page.locator(s).count()) {
-        if (creds.username) {
-          for (const u of userSel) {
-            if (await page.locator(u).count()) { await page.locator(u).first().fill(creds.username); break; }
-          }
-        }
-        if (creds.password) await page.locator(s).first().fill(creds.password);
-        return; // never auto-submit; user reviews + handles any verification
-      }
-    }
-  } catch {
-    /* form not fillable — user logs in manually */
-  }
-}
 
 /**
  * Open one provider headful and keep the window open until the USER closes it.
@@ -79,8 +44,6 @@ async function loginOne(id, index = 0) {
   console.log(`\n[${id}] 窗口已打开。请登录；登录完成后，直接关闭这个窗口即可（会话会自动保存）。`);
   hub.status(id, 'logged-out');
 
-  await tryAutoFill(page, loadCredentials(id));
-
   // Background poll: remember the latest detected login state for reporting.
   let lastOk = false;
   const poll = setInterval(async () => {
@@ -91,10 +54,23 @@ async function loginOne(id, index = 0) {
   // Wait until the user closes the window/context, or a generous timeout.
   await new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
+    // Warn 1 minute before the 15-minute cap so the user isn't surprised.
+    const warnTimer = setTimeout(() => {
+      console.log(`\n[${id}] ⚠️  登录窗口将在 1 分钟后自动关闭`);
+    }, 14 * 60 * 1000);
+    const capTimer = setTimeout(() => {
+      console.log(`\n[${id}] ⏰  登录超时（15 分钟），窗口关闭`);
+      finish();
+    }, 15 * 60 * 1000);
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(warnTimer);
+      clearTimeout(capTimer);
+      resolve();
+    };
     adapter.context.on('close', finish);
     page.on('close', finish);
-    setTimeout(finish, 15 * 60 * 1000); // 15 min safety cap
   });
 
   clearInterval(poll);

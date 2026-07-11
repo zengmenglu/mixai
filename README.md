@@ -44,7 +44,7 @@ backend/
   server.js                ← Express：静态页 + SSE /events + 控制接口 + 登录接口
   orchestrator.js          ← 并发分发、会话↔对话映射、按栏串行、故障隔离
   transport.js             ← SSE 事件总线（按栏推 delta / status）
-  login.js                 ← 登录/恢复：弹可见窗口、半自动填充、等你登好
+  login.js                 ← 登录/恢复：弹可见窗口、等你登好
   browser/
     contextFactory.js      ← 启动持久化浏览器 + stealth（"怎么启动"只在这里）
     scrape.js              ← 通用流式抓取 + "文本稳定窗口"完成判定
@@ -82,17 +82,6 @@ web/                       ← 前端：四栏 UI、统一输入、SSE 客户端
 只改 `config/providers.js` 里每家的 `headless: true|false`，**抓取逻辑一行都不用动**。
 检测严的 ChatGPT/Doubao 建议保持 `false`（headful）。想彻底隐身又不触发检测，
 可后续接入虚拟显示器（xvfb）方案。
-
-### 半自动登录填充（可选）
-
-在项目根放一个本地 `credentials.json`（已 gitignore，绝不上传/外传）：
-
-```json
-{ "chatgpt": { "username": "you@example.com", "password": "***" } }
-```
-
-仅当页面存在密码表单时才会自动填充，且**不会自动提交**；验证码/短信/扫码仍由你完成。
-多数国产平台是手机号+验证码登录，没有密码表单，此项可不配。
 
 ### ChatGPT 专属说明（真 Chrome + 代理 + patchright）
 
