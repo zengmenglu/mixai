@@ -94,6 +94,7 @@ const S = {
 | `done` | 回答完成 |
 | `unavailable` | 配额耗尽/限流 |
 | `logged-out` | 未登录/登录过期 |
+| `stopped` | 用户手动终止（stop 按钮） |
 | `error` | 发生错误 |
 
 ---

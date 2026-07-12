@@ -138,9 +138,10 @@ await this.context.close().catch(() => {});
 |------|------|------|
 | GET | `/api/providers` | 获取 provider 列表 [{id, label}] |
 | GET | `/events` | SSE 流，接收 per-pane delta/status 事件 |
-| POST | `/api/ask` | 提交问题 `{question}`，火后不理 |
+| POST | `/api/ask` | 提交问题 `{question, providers?}`，火后不理；`providers` 缺省=全部 |
 | POST | `/api/new-conversation` | 重置所有 provider 对话 |
-| POST | `/api/login/:id` | 为指定 provider 打开登录窗口 |
+| POST | `/api/login/:id` | 为指定 provider 打开登录窗口（先关闭其运行实例以释放 profile 锁） |
+| POST | `/api/stop/:id` | 终止指定 provider 当前回答（不影响其他 pane） |
 
 ## 关键约束
 

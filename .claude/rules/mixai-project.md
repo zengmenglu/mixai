@@ -10,12 +10,15 @@
 
 ```
 mixai/
+├── README.md                     ← 项目简介 + 快速索引（指向 USAGE.md）
+├── USAGE.md                      ← 完整使用手册（安装/登录/运行/排障，可脱离 AI）
 ├── config/
 │   └── providers.js              ← 集中配置：headless、stealthLevel、stabilityWindowMs
 ├── backend/
 │   ├── server.js                 ← Express 入口：路由 + SSE + 静态托管
-│   ├── orchestrator.js           ← 并发分发 + per-pane 串行 + 故障隔离
+│   ├── orchestrator.js           ← 并发分发 + per-pane 串行 + 故障隔离 + stop/abort
 │   ├── transport.js              ← SSE 事件总线（Hub 单例）
+│   ├── log.js                    ← 结构化日志模块（级别 + provider 标签 + 可选文件）
 │   ├── login.js                  ← 登录/恢复：弹窗引导用户手动登录
 │   ├── adapters/
 │   │   ├── base.js               ←   共享适配器接口（必须继承）
