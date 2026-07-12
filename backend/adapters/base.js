@@ -5,8 +5,14 @@
 
 import { launchProviderContext } from '../browser/contextFactory.js';
 import { streamAnswer } from '../browser/scrape.js';
+import { plog } from '../log.js';
 
-/** @typedef {'idle'|'streaming'|'done'|'unavailable'|'logged-out'} PaneStatus */
+// Second-chance wait after a reload when the first login check failed. Kept
+// shorter than loginSettleMs so a genuinely logged-out provider doesn't double
+// the user's wait - the reload is a best-effort recovery, not a full retry.
+const RELOAD_RETRY_MS = 15000;
+
+/** @typedef {'idle'|'streaming'|'done'|'unavailable'|'logged-out'|'stopped'} PaneStatus */
 
 export class BaseAdapter {
   /** @param {object} cfg one entry from config/providers.js */
@@ -18,6 +24,8 @@ export class BaseAdapter {
     this.context = null;
     /** @type {import('playwright').Page|null} */
     this.page = null;
+    /** Tag-bound logger so every line carries this provider's id. */
+    this.log = plog(cfg.id);
   }
 
   // ---- lifecycle ----------------------------------------------------------
@@ -28,6 +36,8 @@ export class BaseAdapter {
     this.context = context;
     this.page = page;
     await this.page.goto(this.cfg.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const title = await this.page.title().catch(() => '?');
+    this.log.info('navigated', { url: this.cfg.url, title });
   }
 
   async close() {
@@ -50,11 +60,13 @@ export class BaseAdapter {
    */
   async waitLoggedIn(ms = 12000) {
     const start = Date.now();
+    let ok = false;
     do {
-      try { if (await this.ensureLoggedIn()) return true; } catch { /* not ready */ }
+      try { if (await this.ensureLoggedIn()) { ok = true; break; } } catch { /* not ready */ }
       await this.page.waitForTimeout(800);
     } while (Date.now() - start < ms);
-    return false;
+    this.log.info('login check', { ok, waitedMs: Date.now() - start });
+    return ok;
   }
 
   /**
@@ -92,22 +104,37 @@ export class BaseAdapter {
    * Yields {type:'delta'|'status'|'done'} events the orchestrator forwards.
    * @param {string} question
    * @param {'new'|'continue'} mode
+   * @param {AbortSignal} [signal] abort to stop mid-turn (stop button)
    */
-  async *ask(question, mode) {
+  async *ask(question, mode, signal) {
     await this.launch();
+    if (signal?.aborted) return;
 
     if (!(await this.waitLoggedIn(this.cfg.loginSettleMs || 12000))) {
-      yield { type: 'status', status: 'logged-out' };
-      return;
+      // Stale page (auth expired / transient Cloudflare challenge while the
+      // browser sat idle for hours/days). Reload once and recheck before giving
+      // up: a reload re-runs auth/redirects and often recovers it without a
+      // manual login. Falls through to logged-out if it still fails.
+      this.log.info('not logged in, reloading once to retry');
+      await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      if (!(await this.waitLoggedIn(RELOAD_RETRY_MS))) {
+        this.log.warn('still not logged in after reload, skipping turn');
+        yield { type: 'status', status: 'logged-out' };
+        return;
+      }
     }
+    if (signal?.aborted) return;
 
     if (await this.isQuotaExhausted()) {
+      this.log.warn('quota exhausted, skipping turn');
       yield { type: 'status', status: 'unavailable' };
       return;
     }
 
     await this.ensureChat(mode);
+    this.log.info('sending question', { mode, len: question.length });
     await this.send(question);
+    if (signal?.aborted) return;
 
     yield { type: 'status', status: 'streaming' };
 
@@ -116,20 +143,41 @@ export class BaseAdapter {
       readText: () => this.readLatestAnswerText(),
       isStreaming: () => this.isStreaming(),
       stabilityWindowMs: this.cfg.stabilityWindowMs,
+      tag: this.id,
+      signal,
     });
 
+    // Track delta volume so the done-time log can reveal mismatches (e.g. a
+    // provider whose DOM doubles text: totalChars would exceed fullLen).
+    let deltaCount = 0;
+    let totalChars = 0;
     for await (const ev of stream) {
       if (ev.type === 'delta') {
-        if (ev.text) yield { type: 'delta', text: ev.text };
+        if (ev.text) {
+          deltaCount++;
+          totalChars += ev.text.length;
+          yield { type: 'delta', text: ev.text };
+        }
         // mid-stream quota wall can appear after generation starts
       } else if (ev.type === 'done') {
         if (await this.isQuotaExhausted()) {
+          this.log.warn('quota exhausted mid-stream');
           yield { type: 'status', status: 'unavailable' };
           return;
         }
+        this.log.info('answer done', { deltaCount, totalChars, fullLen: ev.full.length });
         yield { type: 'status', status: 'done', full: ev.full };
         return;
       }
     }
+    // Stream ended without a done event => aborted. Caller (orchestrator)
+    // observes the signal and emits 'stopped'; we just stop yielding.
   }
+
+  /**
+   * Best-effort halt of in-flight generation: clicks the provider's stop button
+   * so the composer is freed for the next turn. Override in subclasses that have
+   * a stop-button selector; the default is a no-op.
+   */
+  async stopGenerating() { /* no-op: override in subclasses with a stop button */ }
 }

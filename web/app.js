@@ -18,13 +18,16 @@ const panes = new Map();
 // idempotent, so duplicate/out-of-order SSE events can't wedge the button.
 const BUSY_STATES = new Set(['pending', 'streaming']);
 function anyBusy() {
-  for (const p of panes.values()) if (BUSY_STATES.has(p.state)) return true;
+  // Only selected panes count: a deselected pane finishing in the background
+  // must not block the next question for the ones you're comparing now.
+  for (const [id, p] of panes) if (isSelected(id) && BUSY_STATES.has(p.state)) return true;
   return false;
 }
 
 async function init() {
   const providers = await fetch('/api/providers').then((r) => r.json());
   for (const p of providers) grid.appendChild(makePane(p));
+  buildFilter(providers);
   connectSSE();
   autoGrow();
 }
@@ -32,6 +35,7 @@ async function init() {
 function makePane({ id, label }) {
   const el = document.createElement('section');
   el.className = 'pane';
+  el.dataset.id = id;
   el.innerHTML = `
     <div class="pane-head">
       <span class="label">${label}</span>
@@ -44,12 +48,88 @@ function makePane({ id, label }) {
   const transcript = el.querySelector('[data-transcript]');
   const status = el.querySelector('[data-status]');
   const loginWrap = el.querySelector('[data-login]');
+  // Per-pane ❌ stop button: shown only while this pane is busy. Terminates
+  // just this provider's answer so the others can answer the next question.
+  const stopWrap = document.createElement('div');
+  stopWrap.className = 'pane-stop';
+  stopWrap.hidden = true;
+  const stopBtn = document.createElement('button');
+  stopBtn.textContent = '✕ 终止回答';
+  stopBtn.title = '终止该模型的回答（不影响其他模型）';
+  stopBtn.addEventListener('click', () => {
+    fetch(`/api/stop/${id}`, { method: 'POST' });
+    setStatus(id, 'stopped'); // optimistic; server confirms via SSE 'stopped'
+    refreshSendState();
+  });
+  stopWrap.appendChild(stopBtn);
+  loginWrap.before(stopWrap);
   el.querySelector('[data-login-btn]').addEventListener('click', () => {
     fetch(`/api/login/${id}`, { method: 'POST' });
     setStatus(id, 'logged-out');
   });
-  panes.set(id, { transcript, status, loginWrap, state: 'idle', answerEl: null });
+  panes.set(id, { el, transcript, status, loginWrap, stopWrap, state: 'idle', answerEl: null });
   return el;
+}
+
+// ---- Provider selection: which panes are shown & driven ------------------
+// Checkboxes in the topbar; persisted to localStorage. Unchecked panes are
+// hidden and excluded from the ask fan-out, so you compare only what you pick.
+
+const STORAGE_KEY = 'mixai.selectedProviders';
+const filterEl = document.getElementById('providerFilter');
+
+/** Load saved selection; default to all providers when none stored. */
+function loadSelection(allIds) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    const valid = saved.filter((id) => allIds.includes(id));
+    return valid.length ? valid : allIds.slice();
+  } catch {
+    return allIds.slice();
+  }
+}
+
+/** Build one checkbox per provider and wire change -> re-apply + persist. */
+function buildFilter(providers) {
+  const allIds = providers.map((p) => p.id);
+  const selected = loadSelection(allIds);
+  filterEl.innerHTML = '';
+  for (const p of providers) {
+    const lbl = document.createElement('label');
+    lbl.className = 'pfilter';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.id = p.id;
+    cb.checked = selected.includes(p.id);
+    cb.addEventListener('change', () => {
+      applySelection();
+      saveSelection();
+      refreshSendState();
+    });
+    lbl.appendChild(cb);
+    lbl.append(p.label);
+    filterEl.appendChild(lbl);
+  }
+  applySelection();
+}
+
+/** Currently checked provider ids (order = provider order). */
+function getSelected() {
+  return [...filterEl.querySelectorAll('input:checked')].map((cb) => cb.dataset.id);
+}
+
+function isSelected(id) {
+  return getSelected().includes(id);
+}
+
+/** Show/hide panes by checkbox state. Grid auto-fit reflows the visible ones. */
+function applySelection() {
+  const sel = new Set(getSelected());
+  for (const [id, p] of panes) p.el.classList.toggle('hidden', !sel.has(id));
+}
+
+function saveSelection() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(getSelected()));
 }
 
 function setStatus(id, status) {
@@ -59,6 +139,8 @@ function setStatus(id, status) {
   p.status.textContent = status;
   p.status.className = 'status ' + status;
   p.loginWrap.hidden = status !== 'logged-out';
+  // Stop button only while the pane is actively working.
+  p.stopWrap.hidden = !BUSY_STATES.has(status);
 }
 
 // Append a new turn (question + empty answer) to a pane; returns the answer node.
@@ -107,12 +189,19 @@ function handleEvent(ev) {
     p.answerEl.textContent += ev.text;
     p.transcript.scrollTop = p.transcript.scrollHeight;
   } else if (ev.type === 'status') {
-    // On done, resync to the authoritative full text. Fixes a slow provider
-    // (e.g. ChatGPT) that finished but whose deltas didn't paint.
-    if (ev.status === 'done' && p.answerEl && typeof ev.full === 'string'
-        && ev.full.length > p.answerEl.textContent.length) {
-      p.answerEl.textContent = ev.full;
-      p.transcript.scrollTop = p.transcript.scrollHeight;
+    // On done, resync to the authoritative full text - but only on a clean
+    // superset. Two cases are safe: nothing streamed yet (a slow provider whose
+    // answer arrived in one late burst) or full extends what we already have
+    // (missed tail deltas). If full DIVERGES from what we streamed, trust the
+    // stream: a diverging full usually means the provider's done-time DOM
+    // contains the answer twice, and replacing would print it a second time.
+    if (ev.status === 'done' && p.answerEl && typeof ev.full === 'string') {
+      const streamed = p.answerEl.textContent;
+      if (streamed.length === 0
+          || (ev.full.startsWith(streamed) && ev.full.length > streamed.length)) {
+        p.answerEl.textContent = ev.full;
+        p.transcript.scrollTop = p.transcript.scrollHeight;
+      }
     }
     if (ev.status === 'error' && p.answerEl) {
       p.answerEl.textContent = `（出错：${ev.message || '未知错误'}）`;
@@ -166,11 +255,13 @@ function clearAll() {
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (anyBusy()) return; // block follow-up while any pane is still answering
+  if (anyBusy()) return; // block follow-up while any selected pane is still answering
   const question = input.value.trim();
   if (!question) return;
-  // Append a fresh turn to every pane (history preserved) and await streaming.
-  for (const id of panes.keys()) {
+  const selected = getSelected();
+  if (selected.length === 0) { showToast('请至少勾选一个模型'); return; }
+  // Append a fresh turn to every SELECTED pane (history preserved) and stream.
+  for (const id of selected) {
     const p = panes.get(id);
     p.answerEl = startTurn(p, question);
     setStatus(id, 'pending');
@@ -179,7 +270,7 @@ form.addEventListener('submit', async (e) => {
   input.value = ''; autoGrow();
   await fetch('/api/ask', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, providers: selected }),
   });
 });
 

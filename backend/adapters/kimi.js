@@ -74,4 +74,8 @@ export class KimiAdapter extends BaseAdapter {
   async isQuotaExhausted() {
     return pageTextMatches(this.page, S.quota);
   }
+
+  /** Click the stop button to halt generation, freeing the composer for the
+   *  next turn (used by the per-pane stop button). */
+  async stopGenerating() { await clickFirst(this.page, S.stopButton); }
 }

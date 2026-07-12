@@ -25,6 +25,15 @@ body {
 }
 .topbar h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
 .subtitle { color: var(--muted); font-size: 12px; }
+.provider-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-left: 8px; }
+.pfilter {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.pfilter input { margin: 0; cursor: pointer; accent-color: var(--accent); }
+.pfilter:has(input:checked) { color: var(--text); border-color: var(--accent); }
 .spacer { flex: 1; }
 .conn { color: var(--err); font-size: 12px; }
 .conn.live { color: var(--ok); }
@@ -36,13 +45,13 @@ button.ghost {
 }
 button.ghost:hover { border-color: var(--accent); }
 
-/* Four panes side by side; reflow on narrow viewports. */
+/* Panes side by side; auto-fit reflows when fewer are visible (checkbox
+   selection) or the viewport narrows. */
 .grid {
   flex: 1; display: grid; gap: 10px; padding: 12px;
-  grid-template-columns: repeat(4, 1fr); min-height: 0;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); min-height: 0;
 }
-@media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 620px)  { .grid { grid-template-columns: 1fr; } }
+.pane.hidden { display: none; }
 
 .pane {
   display: flex; flex-direction: column; min-height: 0;
@@ -60,6 +69,7 @@ button.ghost:hover { border-color: var(--accent); }
 .status.pending { color: var(--muted); border-color: var(--muted); }
 .status.streaming { color: var(--accent); border-color: var(--accent); }
 .status.done { color: var(--ok); border-color: var(--ok); }
+.status.stopped { color: var(--warn); border-color: var(--warn); }
 .status.unavailable, .status.error { color: var(--err); border-color: var(--err); }
 .status.logged-out { color: var(--warn); border-color: var(--warn); }
 
@@ -90,6 +100,15 @@ button.ghost:hover { border-color: var(--accent); }
   border: 1px solid var(--warn); border-radius: 8px; padding: 8px;
 }
 .pane-login[hidden] { display: none; }
+
+/* Per-pane stop button: shown only while this pane is busy. */
+.pane-stop { padding: 6px 12px; border-top: 1px solid var(--border); }
+.pane-stop[hidden] { display: none; }
+.pane-stop button {
+  width: 100%; background: var(--panel-2); color: var(--err);
+  border: 1px solid var(--err); border-radius: 8px; padding: 6px; font-size: 12px;
+}
+.pane-stop button:hover { background: var(--err); color: #fff; }
 
 .composer {
   display: flex; gap: 10px; padding: 12px 16px;

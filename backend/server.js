@@ -9,6 +9,7 @@ import { hub } from './transport.js';
 import { Orchestrator } from './orchestrator.js';
 import { providers, PROVIDER_IDS } from '../config/providers.js';
 import { runLogin } from './login.js';
+import { log } from './log.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(__dirname, '..', 'web');
@@ -31,12 +32,14 @@ app.get('/events', (req, res) => {
   req.on('close', detach); // client disconnect — stop forwarding, never crash
 });
 
-// Submit one question -> fan out to all four panes.
+// Submit one question -> fan out to all (or a subset of) panes.
 app.post('/api/ask', (req, res) => {
   const question = (req.body && req.body.question || '').trim();
   if (!question) return res.status(400).json({ error: 'empty question' });
+  const providers = Array.isArray(req.body.providers) ? req.body.providers : null;
+  log.info('server', 'ask', { len: question.length, providers: providers || 'all' });
   res.json({ ok: true }); // fire-and-forward; results arrive over /events
-  orchestrator.ask(question).catch((e) => hub.system(`ask error: ${e}`));
+  orchestrator.ask(question, providers).catch((e) => hub.system(`ask error: ${e}`));
 });
 
 // Start a fresh conversation in all providers.
@@ -49,9 +52,27 @@ app.post('/api/new-conversation', (_req, res) => {
 app.post('/api/login/:id', async (req, res) => {
   const id = req.params.id;
   if (!PROVIDER_IDS.includes(id)) return res.status(404).json({ error: 'unknown provider' });
+  log.info('server', 'login request', { id });
   res.json({ ok: true, message: `Opening ${id} login window…` });
+  // Release the profile lock held by the running adapter so the login window
+  // can launch a fresh browser with the same userDataDir. Otherwise Chrome
+  // delegates to the existing session and the automation pipe breaks (the
+  // "正在现有的浏览器会话中打开" failure).
+  await orchestrator.closeProvider(id).catch(() => {});
   runLogin([id]).catch((e) => hub.system(`login error: ${e}`));
 });
+
+// Stop one provider's current answer (per-pane ❌ button). Other panes keep
+// running; this pane's chain resolves so its next turn isn't blocked.
+app.post('/api/stop/:id', (req, res) => {
+  const id = req.params.id;
+  if (!PROVIDER_IDS.includes(id)) return res.status(404).json({ error: 'unknown provider' });
+  log.info('server', 'stop request', { id });
+  res.json({ ok: true });
+  orchestrator.stop(id).catch((e) => hub.system(`stop error: ${e}`));
+});
+
+log.info('server', 'starting', { port: PORT, providers: PROVIDER_IDS });
 
 // ---- Startup & shutdown ----
 
@@ -62,7 +83,7 @@ orchestrator.launchAll().then(() => {
     console.log(`\n  mixai → http://localhost:${PORT}\n`);
   });
 }).catch((e) => {
-  console.error('launchAll error:', e);
+  log.error('server', 'launchAll error', { error: e?.message });
   // Still start the server so the UI is available for login recovery.
   app.listen(PORT, () => {
     console.log(`\n  mixai → http://localhost:${PORT} (browser launch had errors)\n`);
@@ -71,6 +92,7 @@ orchestrator.launchAll().then(() => {
 
 // Graceful shutdown: close all browser contexts so no zombie processes linger.
 async function shutdown() {
+  log.info('server', 'shutting down');
   console.log('\nshutting down…');
   await orchestrator.closeAll();
   process.exit(0);

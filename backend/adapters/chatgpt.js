@@ -54,8 +54,14 @@ export class ChatGPTAdapter extends BaseAdapter {
   async ensureLoggedIn() {
     // Turnstile / login wall present => treat as logged-out (user resolves it).
     const wall = await anyExists(this.page, S.loginWall);
-    if (wall) return false;
-    return !!(await firstVisible(this.page, S.input));
+    const input = wall ? null : await firstVisible(this.page, S.input);
+    const ok = !!input;
+    if (!ok) {
+      // Surface WHY we think it's not logged in: a hard wall (Turnstile/auth)
+      // vs. just no composer yet (page still hydrating / proxy slow / blocked).
+      this.log.warn('not logged in', { wall: !!wall, input: !!input, url: this.page.url() });
+    }
+    return ok;
   }
 
   async ensureChat(mode) {
@@ -86,4 +92,8 @@ export class ChatGPTAdapter extends BaseAdapter {
   async isQuotaExhausted() {
     return pageTextMatches(this.page, S.quota);
   }
+
+  /** Click the stop button to halt generation, freeing the composer for the
+   *  next turn (used by the per-pane stop button). */
+  async stopGenerating() { await clickFirst(this.page, S.stopButton); }
 }
