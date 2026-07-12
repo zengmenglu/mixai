@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { providers, PROVIDER_IDS } from '../config/providers.js';
 import { createAdapter } from './adapters/index.js';
 import { hub } from './transport.js';
+import { log } from './log.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +42,7 @@ async function loginOne(id, index = 0) {
   await adapter.launch();
   const page = adapter.page;
 
+  log.info(id, 'login window opened');
   console.log(`\n[${id}] 窗口已打开。请登录；登录完成后，直接关闭这个窗口即可（会话会自动保存）。`);
   hub.status(id, 'logged-out');
 
@@ -48,7 +50,10 @@ async function loginOne(id, index = 0) {
   let lastOk = false;
   const poll = setInterval(async () => {
     try { lastOk = await adapter.ensureLoggedIn(); } catch { /* page busy */ }
-    if (lastOk) hub.status(id, 'idle');
+    if (lastOk) {
+      log.info(id, 'login detected');
+      hub.status(id, 'idle');
+    }
   }, 3000);
 
   // Wait until the user closes the window/context, or a generous timeout.
@@ -75,6 +80,7 @@ async function loginOne(id, index = 0) {
 
   clearInterval(poll);
   await adapter.close().catch(() => {});
+  log.info(id, 'login window closed', { ok: lastOk });
   console.log(`[${id}] 窗口已关闭。检测登录态：${lastOk ? '✓ 已登录' : '未确认（若你已登录，会话仍已保存）'}`);
   return { id, ok: lastOk };
 }

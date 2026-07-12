@@ -6,6 +6,7 @@
 
 import fs from 'node:fs';
 import { chromium as pwChromium } from 'playwright';
+import { plog } from '../log.js';
 
 // patchright is loaded lazily (only providers that opt into engine:'patchright'
 // pay for it). It's a stealth-patched drop-in that defeats Cloudflare Turnstile.
@@ -81,6 +82,7 @@ function parseProxy(str) {
  * @returns {Promise<{ context: import('playwright').BrowserContext, page: import('playwright').Page }>}
  */
 export async function launchProviderContext(cfg) {
+  const log = plog(cfg.id);
   fs.mkdirSync(cfg.userDataDir, { recursive: true });
 
   const chromium = await engineFor(cfg);
@@ -105,7 +107,24 @@ export async function launchProviderContext(cfg) {
       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
   }
 
-  const context = await chromium.launchPersistentContext(cfg.userDataDir, launchOpts);
+  log.info('launching browser', {
+    engine: cfg.engine || 'playwright',
+    headless: cfg.headless,
+    channel: cfg.channel || null,
+    proxy: cfg.proxy || null,
+    stealth: cfg.stealthLevel,
+  });
+
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(cfg.userDataDir, launchOpts);
+  } catch (err) {
+    // Most common causes: proxy unreachable, Chrome channel not installed, or
+    // another process holds the userDataDir lock. Surface clearly, then rethrow
+    // so the caller (launchAll) can mark this pane failed.
+    log.error('browser launch failed', { error: err.message });
+    throw err;
+  }
 
   if (!usePatchright) {
     const init = stealthInitScript(cfg.stealthLevel);
@@ -113,5 +132,6 @@ export async function launchProviderContext(cfg) {
   }
 
   const page = context.pages()[0] || (await context.newPage());
+  log.info('browser launched', { pages: context.pages().length });
   return { context, page };
 }
