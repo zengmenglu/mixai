@@ -24,6 +24,35 @@ function anyBusy() {
   return false;
 }
 
+// ---- Markdown rendering --------------------------------------------------
+// Answers stream as plain text but often contain markdown (tables, code, lists).
+// Render to HTML via marked (GFM) and strip unsafe nodes so AI output can't run
+// scripts. Re-rendered on each delta; a table snaps into place once complete.
+marked.setOptions({ gfm: true, breaks: true });
+
+/** Strip scripts/iframes/on* handlers/javascript: URLs from an HTML fragment. */
+function sanitizeHtml(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll('script, iframe, object, embed').forEach((el) => el.remove());
+  tpl.content.querySelectorAll('*').forEach((el) => {
+    [...el.attributes].forEach((attr) => {
+      if (attr.name.startsWith('on') || attr.value.toLowerCase().includes('javascript:')) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+  return tpl.content;
+}
+
+/** Render the pane's accumulated raw markdown into its answer bubble. */
+function renderAnswer(p) {
+  if (!p.answerEl) return;
+  p.answerEl.innerHTML = '';
+  p.answerEl.appendChild(sanitizeHtml(marked.parse(p.rawText || '')));
+  p.transcript.scrollTop = p.transcript.scrollHeight;
+}
+
 async function init() {
   const providers = await fetch('/api/providers').then((r) => r.json());
   for (const p of providers) grid.appendChild(makePane(p));
@@ -67,7 +96,7 @@ function makePane({ id, label }) {
     fetch(`/api/login/${id}`, { method: 'POST' });
     setStatus(id, 'logged-out');
   });
-  panes.set(id, { el, transcript, status, loginWrap, stopWrap, state: 'idle', answerEl: null });
+  panes.set(id, { el, transcript, status, loginWrap, stopWrap, state: 'idle', answerEl: null, rawText: '' });
   return el;
 }
 
@@ -186,8 +215,8 @@ function handleEvent(ev) {
 
   if (ev.type === 'delta') {
     if (!p.answerEl) return;
-    p.answerEl.textContent += ev.text;
-    p.transcript.scrollTop = p.transcript.scrollHeight;
+    p.rawText += ev.text;
+    renderAnswer(p);
   } else if (ev.type === 'status') {
     // On done, resync to the authoritative full text - but only on a clean
     // superset. Two cases are safe: nothing streamed yet (a slow provider whose
@@ -196,21 +225,24 @@ function handleEvent(ev) {
     // stream: a diverging full usually means the provider's done-time DOM
     // contains the answer twice, and replacing would print it a second time.
     if (ev.status === 'done' && p.answerEl && typeof ev.full === 'string') {
-      const streamed = p.answerEl.textContent;
+      const streamed = p.rawText || '';
       if (streamed.length === 0
           || (ev.full.startsWith(streamed) && ev.full.length > streamed.length)) {
-        p.answerEl.textContent = ev.full;
-        p.transcript.scrollTop = p.transcript.scrollHeight;
+        p.rawText = ev.full;
+        renderAnswer(p);
       }
     }
     if (ev.status === 'error' && p.answerEl) {
-      p.answerEl.textContent = `（出错：${ev.message || '未知错误'}）`;
+      // Append the error to whatever streamed so partial work isn't lost.
+      p.rawText = (p.rawText || '') + `\n\n> ⚠️ 出错：${ev.message || '未知错误'}`;
+      renderAnswer(p);
     }
     // Remove empty answer bubble when a provider is not logged in, so no blank
     // bubble lingers in the transcript.
     if (ev.status === 'logged-out' && p.answerEl) {
       p.answerEl.closest('.turn')?.remove();
       p.answerEl = null;
+      p.rawText = '';
     }
     setStatus(ev.pane, ev.status);
     refreshSendState();
@@ -248,7 +280,7 @@ function hideToast() {
 }
 
 function clearAll() {
-  for (const p of panes.values()) { p.transcript.innerHTML = ''; p.answerEl = null; }
+  for (const p of panes.values()) { p.transcript.innerHTML = ''; p.answerEl = null; p.rawText = ''; }
   for (const id of panes.keys()) setStatus(id, 'idle');
   refreshSendState();
 }
@@ -264,6 +296,7 @@ form.addEventListener('submit', async (e) => {
   for (const id of selected) {
     const p = panes.get(id);
     p.answerEl = startTurn(p, question);
+    p.rawText = '';
     setStatus(id, 'pending');
   }
   refreshSendState();
