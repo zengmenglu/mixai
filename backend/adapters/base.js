@@ -31,13 +31,45 @@ export class BaseAdapter {
   // ---- lifecycle ----------------------------------------------------------
 
   async launch() {
-    if (this.page) return;
+    // Reuse a live page if we still have one. Probe it cheaply so we also catch
+    // a SIGKILL'd browser (whose close event never fired), not just a window
+    // the user closed. Dead -> re-launch fresh; we never operate on a dead page.
+    if (this.page && !this.page.isClosed()) {
+      // Race with a short timeout: a dead browser usually rejects fast, but a
+      // hung transport must not block the turn for the default 30s.
+      const alive = await Promise.race([
+        this.page.evaluate(() => true).catch(() => false),
+        new Promise((r) => setTimeout(() => r(false), 2000)),
+      ]);
+      if (alive) return;
+      this.log.warn('existing browser is dead, relaunching');
+    }
+    // Release the old context (and its profile lock) before re-launching,
+    // otherwise the new launch collides with the stale one over the userDataDir.
+    if (this.context) {
+      await this.context.close().catch(() => {});
+      this.context = null;
+      this.page = null;
+    }
     const { context, page } = await launchProviderContext(this.cfg);
     this.context = context;
     this.page = page;
+    this.#watchClose(context, page);
     await this.page.goto(this.cfg.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
     const title = await this.page.title().catch(() => '?');
     this.log.info('navigated', { url: this.cfg.url, title });
+  }
+
+  /** Watch for external close (user closed the window, or the browser died) so
+   *  the next turn's launch() re-opens a fresh browser instead of erroring on a
+   *  dead page. Idempotent: only clears if the refs still point at our objects. */
+  #watchClose(context, page) {
+    const clear = () => {
+      if (this.page === page) this.page = null;
+      if (this.context === context) this.context = null;
+    };
+    page.on('close', () => { clear(); this.log.warn('page closed externally; will relaunch on next turn'); });
+    context.on('close', () => { clear(); this.log.warn('browser closed externally; will relaunch on next turn'); });
   }
 
   async close() {

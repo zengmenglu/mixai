@@ -56,7 +56,21 @@ export async function* streamAnswer({
       log.info('aborted, stopping stream', { fullLen: last.length });
       return;
     }
-    await page.waitForTimeout(POLL_MS);
+    // User closed the window mid-stream: finish gracefully with the partial
+    // text instead of throwing "Target page ... has been closed". The next
+    // turn's launch() re-opens a fresh browser, so no error surfaces.
+    if (page.isClosed()) {
+      log.warn('page closed mid-stream, finishing partial', { fullLen: last.length });
+      yield { type: 'done', full: last };
+      return;
+    }
+    try {
+      await page.waitForTimeout(POLL_MS);
+    } catch {
+      log.warn('page closed during wait, finishing partial', { fullLen: last.length });
+      yield { type: 'done', full: last };
+      return;
+    }
 
     let current = '';
     try {
