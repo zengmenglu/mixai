@@ -22,6 +22,9 @@ const POLL_MS = 150;
  * @param {number} [opts.maxMs] hard cap to avoid hanging forever
  * @param {string} [opts.tag] provider id for log lines
  * @param {AbortSignal} [opts.signal] abort to stop streaming mid-answer
+ * @param {string} [opts.baseline] text of the PREVIOUS answer still on the page
+ *   (continue mode); the stream waits for new text that diverges from it so we
+ *   never re-stream the old answer. Empty/omitted for a fresh chat.
  * @returns {AsyncGenerator<{type:'delta', text:string} | {type:'done', full:string}>}
  */
 export async function* streamAnswer({
@@ -32,6 +35,7 @@ export async function* streamAnswer({
   maxMs = 180000,
   tag = 'scrape',
   signal,
+  baseline = '',
 }) {
   const log = plog(tag);
   let last = '';
@@ -48,6 +52,10 @@ export async function* streamAnswer({
   // text is long enough that an exact self-repetition is implausibly a real
   // answer (avoids truncating short legitimate repetitions like "是。是。").
   const ECHO_MIN_LEN = 10;
+  // Continue mode: the page still shows the PREVIOUS answer. Don't stream it
+  // again - wait until readText diverges from the baseline (the new answer
+  // appears), then stream from scratch. baseline='' (fresh chat) drops immediately.
+  let baselineDropped = !baseline;
 
   while (true) {
     // Stop button: abort returns promptly (within one poll) without yielding a
@@ -88,50 +96,61 @@ export async function* streamAnswer({
       current = last; // transient DOM detach during re-render
     }
 
-    if (current.length > last.length) {
-      // Safety net for provider DOM echo: if the container duplicated its
-      // content (current is exactly last repeated), streaming the slice would
-      // print the whole answer a second time. Skip and warn. The proper fix is
-      // the provider's readLatestAnswerText selector (see docs/adapters.md).
-      const isEcho = last.length >= ECHO_MIN_LEN && current === last + last;
-      if (isEcho) {
-        log.warn('detected DOM echo, skipping duplicate', { lastLen: last.length });
+    // Continue mode: hold off while the page still shows the previous answer.
+    // Reset the stability clock so we never declare done on stale text; once the
+    // read text diverges from the baseline, drop it and stream the new answer.
+    if (!baselineDropped) {
+      if (current !== baseline) {
+        baselineDropped = true;
+        last = '';
+        lastGrowAt = Date.now();
       } else {
-        const delta = current.slice(last.length);
-        log.debug('delta', { lastLen: last.length, curLen: current.length, deltaLen: delta.length });
-        last = current;
         lastGrowAt = Date.now();
-        sawAnyText = sawAnyText || current.trim().length > 0;
-        yield { type: 'delta', text: delta };
-      }
-    } else if (current !== last && current.length > 0) {
-      // Container re-rendered/replaced (length not strictly increasing).
-      // Emit the whole thing as a correction-free resync only if it diverged.
-      if (!current.startsWith(last)) {
-        log.debug('container re-rendered, text diverged', { lastLen: last.length, curLen: current.length });
-        last = current;
-        lastGrowAt = Date.now();
-        yield { type: 'delta', text: '' }; // keep stream alive; UI keeps prior text
+        current = last; // no growth to evaluate below
       }
     }
 
-    const stableFor = Date.now() - lastGrowAt;
-    let streaming = false;
-    if (isStreaming) {
-      try {
-        streaming = await isStreaming();
-      } catch {
-        streaming = false;
+    if (baselineDropped) {
+      if (current.length > last.length) {
+        // Safety net for provider DOM echo: if the container duplicated its
+        // content (current is exactly last repeated), streaming the slice would
+        // print the whole answer a second time. Skip and warn.
+        const isEcho = last.length >= ECHO_MIN_LEN && current === last + last;
+        if (isEcho) {
+          log.warn('detected DOM echo, skipping duplicate', { lastLen: last.length });
+        } else {
+          const delta = current.slice(last.length);
+          log.debug('delta', { lastLen: last.length, curLen: current.length, deltaLen: delta.length });
+          last = current;
+          lastGrowAt = Date.now();
+          sawAnyText = sawAnyText || current.trim().length > 0;
+          yield { type: 'delta', text: delta };
+        }
+      } else if (current !== last && current.length > 0) {
+        // Container re-rendered/replaced (length not strictly increasing).
+        if (!current.startsWith(last)) {
+          log.debug('container re-rendered, text diverged', { lastLen: last.length, curLen: current.length });
+          last = current;
+          lastGrowAt = Date.now();
+          yield { type: 'delta', text: '' };
+        }
       }
-    }
 
-    const stable = stableFor >= stabilityWindowMs;
-    const longEnough = sawAnyText || Date.now() - startedAt > 8000;
-
-    if (stable && !streaming && longEnough) {
-      log.info('answer stable, finishing', { fullLen: last.length, stableFor, preview: last.slice(0, 80) });
-      yield { type: 'done', full: last };
-      return;
+      const stableFor = Date.now() - lastGrowAt;
+      let streaming = false;
+      if (isStreaming) {
+        try { streaming = await isStreaming(); } catch { streaming = false; }
+      }
+      const stable = stableFor >= stabilityWindowMs;
+      // In continue mode (baseline set) require actual new text before finishing,
+      // so we never return the stale previous answer. Fresh chats keep the 8s
+      // fallback for fast/empty responses.
+      const longEnough = sawAnyText || (!baseline && Date.now() - startedAt > 8000);
+      if (stable && !streaming && longEnough) {
+        log.info('answer stable, finishing', { fullLen: last.length, stableFor, preview: last.slice(0, 80) });
+        yield { type: 'done', full: last };
+        return;
+      }
     }
 
     if (Date.now() - startedAt > maxMs) {

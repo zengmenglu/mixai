@@ -5,7 +5,7 @@
 
 import { BaseAdapter } from './base.js';
 import {
-  firstVisible, anyExists, typeInto, clickFirst, pageTextMatches,
+  firstVisible, lastVisible, anyExists, typeInto, clickFirst, pageTextMatches,
 } from './util.js';
 
 const S = {
@@ -31,11 +31,11 @@ const S = {
     'text=新建对话', 'text=New chat', 'a:has-text("新对话")',
     'button:has-text("新对话")',
   ],
-  // Latest assistant answer container
+  // Latest assistant answer container (last match = newest turn).
   answer: [
-    '.ds-markdown:last-of-type',
-    'div[class*="markdown"]:last-of-type',
-    'div[class*="message"][class*="assistant"]:last-of-type',
+    '.ds-markdown',
+    'div[class*="markdown"]',
+    'div[class*="message"][class*="assistant"]',
   ],
   // "Still generating" signal
   stopButton: [
@@ -72,7 +72,7 @@ export class DeepSeekAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    const loc = await firstVisible(this.page, S.answer);
+    const loc = await lastVisible(this.page, S.answer);
     return loc ? (await loc.innerText().catch(() => '')) : '';
   }
 

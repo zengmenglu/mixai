@@ -8,7 +8,7 @@
 
 import { BaseAdapter } from './base.js';
 import {
-  firstVisible, anyExists, typeInto, clickFirst, pageTextMatches,
+  firstVisible, lastVisible, anyExists, typeInto, clickFirst, pageTextMatches,
 } from './util.js';
 
 const S = {
@@ -29,10 +29,11 @@ const S = {
     'a:has-text("New chat")',
   ],
   // Assistant turns are tagged with data-message-author-role="assistant".
+  // Last match = newest turn (drop :last-of-type, which matches by tag not class).
   answer: [
-    'div[data-message-author-role="assistant"]:last-of-type .markdown',
-    'div[data-message-author-role="assistant"]:last-of-type',
-    'div[class*="markdown"]:last-of-type',
+    'div[data-message-author-role="assistant"] .markdown',
+    'div[data-message-author-role="assistant"]',
+    'div[class*="markdown"]',
   ],
   stopButton: [
     'button[data-testid="stop-button"]',
@@ -81,7 +82,7 @@ export class ChatGPTAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    const loc = await firstVisible(this.page, S.answer);
+    const loc = await lastVisible(this.page, S.answer);
     return loc ? (await loc.innerText().catch(() => '')) : '';
   }
 

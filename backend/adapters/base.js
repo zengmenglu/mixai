@@ -170,6 +170,11 @@ export class BaseAdapter {
 
     yield { type: 'status', status: 'streaming' };
 
+    // Capture the previous answer still on the page (continue mode) so the
+    // scraper waits for NEW text instead of re-streaming the old answer. Empty
+    // for a fresh chat (nothing on the page yet).
+    const baseline = await this.readLatestAnswerText().catch(() => '');
+
     const stream = streamAnswer({
       page: this.page,
       readText: () => this.readLatestAnswerText(),
@@ -177,6 +182,7 @@ export class BaseAdapter {
       stabilityWindowMs: this.cfg.stabilityWindowMs,
       tag: this.id,
       signal,
+      baseline,
     });
 
     // Track delta volume so the done-time log can reveal mismatches (e.g. a
@@ -198,7 +204,9 @@ export class BaseAdapter {
           return;
         }
         this.log.info('answer done', { deltaCount, totalChars, fullLen: ev.full.length });
-        yield { type: 'status', status: 'done', full: ev.full };
+        // Capture the conversation URL so a later "resume" can navigate back to
+        // this exact chat and the provider recalls the prior turns.
+        yield { type: 'status', status: 'done', full: ev.full, url: this.page.url() };
         return;
       }
     }
