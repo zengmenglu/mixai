@@ -7,8 +7,9 @@ const grid = document.getElementById('grid');
 const form = document.getElementById('composer');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
-const newConvBtn = document.getElementById('newConvBtn');
+const newSessBtn = document.getElementById('newSessBtn');
 const conn = document.getElementById('conn');
+const sessionListEl = document.getElementById('sessionList');
 
 // id -> { transcript, status, loginWrap, state, answerEl }
 const panes = new Map();
@@ -53,10 +54,131 @@ function renderAnswer(p) {
   p.transcript.scrollTop = p.transcript.scrollHeight;
 }
 
+// ---- Sessions (history) --------------------------------------------------
+// Sessions live in localStorage: {id, title, createdAt, chatUrls, turns}.
+// chatUrls[providerId] is captured from the done event so a later "resume"
+// navigates the provider back to that exact conversation (true context recall).
+// Capped to MAX_SESSIONS to bound localStorage growth.
+
+const SESSIONS_KEY = 'mixai.sessions';
+const MAX_SESSIONS = 50;
+let sessions = [];          // newest first
+let currentSession = null;  // the session being viewed/continued (null = fresh)
+
+/** Load saved sessions from localStorage. */
+function loadSessions() {
+  try { sessions = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]'); }
+  catch { sessions = []; }
+}
+
+/** Persist sessions (capped) and refresh the sidebar. */
+function saveSessions() {
+  sessions = sessions.slice(0, MAX_SESSIONS);
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)); } catch { /* quota */ }
+  renderSessionList();
+}
+
+/** Format a timestamp as MM-DD HH:MM. */
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Render the sidebar list of past sessions. */
+function renderSessionList() {
+  if (!sessions.length) {
+    sessionListEl.innerHTML = '<div class="session-empty">暂无历史会话</div>';
+    return;
+  }
+  sessionListEl.innerHTML = '';
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (currentSession && currentSession.id === s.id ? ' active' : '');
+    const title = document.createElement('span');
+    title.className = 'sess-title';
+    title.textContent = s.title || '(未命名)';
+    title.title = `${s.title || ''}  ·  ${fmtTime(s.createdAt)}`;
+    const del = document.createElement('button');
+    del.className = 'sess-del';
+    del.textContent = '×';
+    del.title = '删除该会话';
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(s.id); });
+    item.append(title, del);
+    item.addEventListener('click', () => loadSession(s.id));
+    sessionListEl.appendChild(item);
+  }
+}
+
+/** Start a fresh session: clear the panes and deselect the current one. */
+function newSession() {
+  currentSession = null;
+  clearAll();
+  renderSessionList();
+}
+
+/** Create a new session record for a question; returns it. */
+function createSession(question) {
+  const s = {
+    id: 'sess-' + Date.now(),
+    title: question.slice(0, 30),
+    createdAt: Date.now(),
+    chatUrls: {},
+    turns: [],
+  };
+  sessions.unshift(s);
+  currentSession = s;
+  saveSessions();
+  return s;
+}
+
+/** Load a past session into the panes and mark it current so the next question
+ *  resumes it (the backend navigates back to its chatUrls). */
+function loadSession(id) {
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return;
+  currentSession = s;
+  clearAll();
+  for (const turn of s.turns) {
+    for (const pid of panes.keys()) {
+      const p = panes.get(pid);
+      p.answerEl = startTurn(p, turn.question);
+      p.rawText = (turn.answers && turn.answers[pid]) || '';
+      renderAnswer(p);
+    }
+  }
+  renderSessionList();
+}
+
+/** Delete a session (and clear the view if it was current). */
+function deleteSession(id) {
+  sessions = sessions.filter((s) => s.id !== id);
+  if (currentSession && currentSession.id === id) { currentSession = null; clearAll(); }
+  saveSessions();
+}
+
+/** Persist a pane's final answer text into the current session's latest turn. */
+function persistAnswer(paneId, text) {
+  if (!currentSession || !currentSession.turns.length) return;
+  const turn = currentSession.turns[currentSession.turns.length - 1];
+  if (!turn.answers) turn.answers = {};
+  turn.answers[paneId] = text;
+  saveSessions();
+}
+
+/** Record a provider's conversation URL so a future resume can return to it. */
+function persistChatUrl(paneId, url) {
+  if (!currentSession || !url) return;
+  currentSession.chatUrls[paneId] = url;
+  saveSessions();
+}
+
 async function init() {
   const providers = await fetch('/api/providers').then((r) => r.json());
   for (const p of providers) grid.appendChild(makePane(p));
   buildFilter(providers);
+  loadSessions();
+  renderSessionList();
   connectSSE();
   autoGrow();
 }
@@ -207,7 +329,13 @@ function connectSSE() {
 
 function handleEvent(ev) {
   if (ev.type === 'system') {
-    if (ev.message === 'new-conversation') clearAll();
+    if (ev.message === 'new-conversation') {
+      // Backend reset pane.started so the next ask opens fresh chats; mirror
+      // that locally by clearing the current session and the view.
+      currentSession = null;
+      clearAll();
+      renderSessionList();
+    }
     return;
   }
   const p = panes.get(ev.pane);
@@ -231,11 +359,18 @@ function handleEvent(ev) {
         p.rawText = ev.full;
         renderAnswer(p);
       }
+      // Persist the final answer + conversation URL (for true resume later).
+      persistAnswer(ev.pane, p.rawText);
+      persistChatUrl(ev.pane, ev.url);
+    }
+    if (ev.status === 'stopped' && p.answerEl) {
+      persistAnswer(ev.pane, p.rawText);
     }
     if (ev.status === 'error' && p.answerEl) {
       // Append the error to whatever streamed so partial work isn't lost.
       p.rawText = (p.rawText || '') + `\n\n> ⚠️ 出错：${ev.message || '未知错误'}`;
       renderAnswer(p);
+      persistAnswer(ev.pane, p.rawText);
     }
     // Remove empty answer bubble when a provider is not logged in, so no blank
     // bubble lingers in the transcript.
@@ -292,6 +427,16 @@ form.addEventListener('submit', async (e) => {
   if (!question) return;
   const selected = getSelected();
   if (selected.length === 0) { showToast('请至少勾选一个模型'); return; }
+  // Start a session if none is current; append this turn to it.
+  if (!currentSession) createSession(question);
+  currentSession.turns.push({ question, answers: {} });
+  saveSessions();
+  // Resume URLs: send what we have so the backend navigates back to each
+  // provider's prior conversation (skipped if already on it = cheap continue).
+  const resumeUrls = {};
+  for (const id of selected) {
+    if (currentSession.chatUrls[id]) resumeUrls[id] = currentSession.chatUrls[id];
+  }
   // Append a fresh turn to every SELECTED pane (history preserved) and stream.
   for (const id of selected) {
     const p = panes.get(id);
@@ -303,7 +448,7 @@ form.addEventListener('submit', async (e) => {
   input.value = ''; autoGrow();
   await fetch('/api/ask', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, providers: selected }),
+    body: JSON.stringify({ question, providers: selected, resumeUrls }),
   });
 });
 
@@ -311,9 +456,11 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
 });
 
-newConvBtn.addEventListener('click', async () => {
+newSessBtn.addEventListener('click', async () => {
+  if (anyBusy()) { showToast('请等待当前回答结束'); return; }
+  // Resets backend pane.started (next ask = fresh chats); the SSE
+  // 'new-conversation' event clears the view + currentSession.
   await fetch('/api/new-conversation', { method: 'POST' });
-  clearAll();
 });
 
 function autoGrow() {

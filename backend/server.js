@@ -37,9 +37,10 @@ app.post('/api/ask', (req, res) => {
   const question = (req.body && req.body.question || '').trim();
   if (!question) return res.status(400).json({ error: 'empty question' });
   const providers = Array.isArray(req.body.providers) ? req.body.providers : null;
-  log.info('server', 'ask', { len: question.length, providers: providers || 'all' });
+  const resumeUrls = req.body.resumeUrls && typeof req.body.resumeUrls === 'object' ? req.body.resumeUrls : null;
+  log.info('server', 'ask', { len: question.length, providers: providers || 'all', resume: !!resumeUrls });
   res.json({ ok: true }); // fire-and-forward; results arrive over /events
-  orchestrator.ask(question, providers).catch((e) => hub.system(`ask error: ${e}`));
+  orchestrator.ask(question, providers, resumeUrls).catch((e) => hub.system(`ask error: ${e}`));
 });
 
 // Start a fresh conversation in all providers.

@@ -49,22 +49,41 @@ export class Orchestrator {
 
   /** Fan a question out to all panes concurrently. Returns when all settle.
    *  @param {string} question
-   *  @param {string[]} [ids] optional provider-id allowlist; unset/empty = all */
-  ask(question, ids) {
+   *  @param {string[]} [ids] optional provider-id allowlist; unset/empty = all
+   *  @param {Object<string,string>} [resumeUrls] map providerId->chat URL to
+   *    resume; the pane navigates there only if it isn't already on that URL
+   *    (so same-session continue is free, cross-session resume navigates). */
+  ask(question, ids, resumeUrls) {
     const allow = new Set(ids && ids.length ? ids : null);
     const runs = [];
     for (const pane of this.panes.values()) {
       if (allow.size && !allow.has(pane.adapter.id)) continue;
+      const resumeUrl = resumeUrls && resumeUrls[pane.adapter.id];
       // Append to this pane's chain so its turns run strictly in order.
-      pane.chain = pane.chain.then(() => this.#runPane(pane, question));
+      pane.chain = pane.chain.then(() => this.#runPane(pane, question, resumeUrl));
       runs.push(pane.chain);
     }
-    log.info('orchestrator', 'ask fanning out', { panes: runs.length, preview: question.slice(0, 40) });
+    log.info('orchestrator', 'ask fanning out', { panes: runs.length, preview: question.slice(0, 40), resume: !!resumeUrls });
     return Promise.allSettled(runs);
   }
 
-  async #runPane(pane, question) {
+  async #runPane(pane, question, resumeUrl) {
     const { adapter } = pane;
+    // Resume a prior conversation: navigate to its saved URL so the provider
+    // recalls the context, then continue on it. Skip the nav if we're already
+    // on that URL (cheap same-session follow-ups). Fall back to a fresh chat if
+    // the URL won't load.
+    if (resumeUrl) {
+      await adapter.launch();
+      if (adapter.page.url() !== resumeUrl) {
+        const ok = await adapter.page.goto(resumeUrl, { waitUntil: 'domcontentloaded' })
+          .then(() => true).catch(() => false);
+        pane.started = ok;
+        log.info(adapter.id, ok ? 'resumed conversation' : 'resume nav failed, new chat', { url: resumeUrl });
+      } else {
+        pane.started = true; // already on this conversation
+      }
+    }
     const mode = pane.started ? 'continue' : 'new';
     const controller = new AbortController();
     pane.controller = controller;
@@ -78,7 +97,7 @@ export class Orchestrator {
           // render/resync even if some streamed deltas were missed (e.g. a slow
           // provider whose answer rendered in one late burst).
           if (ev.status === 'done' && typeof ev.full === 'string') {
-            hub.status(adapter.id, 'done', { full: ev.full });
+            hub.status(adapter.id, 'done', { full: ev.full, url: ev.url });
           } else {
             hub.status(adapter.id, ev.status);
           }
