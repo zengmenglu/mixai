@@ -80,13 +80,13 @@ log.info('server', 'starting', { port: PORT, providers: PROVIDER_IDS });
 // Launch browsers first, then start HTTP. This avoids the race where a request
 // arrives before launchAll completes.
 orchestrator.launchAll().then(() => {
-  app.listen(PORT, () => {
+  app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n  mixai → http://localhost:${PORT}\n`);
   });
 }).catch((e) => {
   log.error('server', 'launchAll error', { error: e?.message });
   // Still start the server so the UI is available for login recovery.
-  app.listen(PORT, () => {
+  app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n  mixai → http://localhost:${PORT} (browser launch had errors)\n`);
   });
 });
