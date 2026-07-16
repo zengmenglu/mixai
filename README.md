@@ -44,18 +44,20 @@ npm start                           # 打开 http://localhost:5173
 config/providers.js        ← 唯一的"每家配置"：headless、启动参数、stealth 等级、
                               稳定窗口。改 headful↔headless 只动这里。
 backend/
-  server.js                ← Express：静态页 + SSE /events + 控制接口 + 登录接口
-  orchestrator.js          ← 并发分发、会话↔对话映射、按栏串行、故障隔离
+  server.js                ← Express（仅 127.0.0.1）：静态页 + SSE + 控制接口
+  orchestrator.js          ← 并发分发、按栏串行、故障隔离、stop/abort、会话恢复
   transport.js             ← SSE 事件总线（按栏推 delta / status）
+  log.js                   ← 结构化日志（LOG_LEVEL/LOG_FILE，排障关键）
   login.js                 ← 登录/恢复：弹可见窗口、等你登好
   browser/
-    contextFactory.js      ← 启动持久化浏览器 + stealth（"怎么启动"只在这里）
-    scrape.js              ← 通用流式抓取 + "文本稳定窗口"完成判定
+    contextFactory.js      ← 启动持久化浏览器 + stealth + 自愈重连
+    scrape.js              ← 流式抓取 + 完成判定 + baseline + 重复拦截
   adapters/
     base.js                ← 共享适配器接口（ensureLoggedIn/ensureChat/send/...）
     deepseek.js kimi.js doubao.js chatgpt.js   ← 每家一个，只装选择器与交互
     util.js index.js
-web/                       ← 前端：四栏 UI、统一输入、SSE 客户端
+web/                       ← 前端：历史会话侧边栏 + 四栏对比 + markdown 渲染
+  vendor/marked.min.js     ← markdown 解析（GFM，本地化）
 ```
 
 ## 维护手册（重要：这是会"时不时坏"的工具）

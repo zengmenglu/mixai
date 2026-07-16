@@ -16,7 +16,7 @@ mixai/
 │   └── providers.js              ← 集中配置：headless、stealthLevel、stabilityWindowMs
 ├── backend/
 │   ├── server.js                 ← Express 入口：路由 + SSE + 静态托管
-│   ├── orchestrator.js           ← 并发分发 + per-pane 串行 + 故障隔离 + stop/abort
+│   ├── orchestrator.js           ← 并发分发 + per-pane 串行 + 故障隔离 + stop/abort + 会话恢复
 │   ├── transport.js              ← SSE 事件总线（Hub 单例）
 │   ├── log.js                    ← 结构化日志模块（级别 + provider 标签 + 可选文件）
 │   ├── login.js                  ← 登录/恢复：弹窗引导用户手动登录
@@ -30,11 +30,12 @@ mixai/
 │   │   └── chatgpt.js            ←   ChatGPT 选择器与交互
 │   └── browser/
 │       ├── contextFactory.js     ←   浏览器启动 + stealth 注入
-│       └── scrape.js             ←   流式抓取 + text-stability 完成判定
+│       └── scrape.js             ←   流式抓取 + 完成判定 + baseline + DOM-echo 拦截
 ├── web/
-│   ├── index.html                ← 前端 UI：四栏对比
-│   ├── app.js                    ← SSE 客户端 + 交互逻辑
-│   └── styles.css                ← 样式
+│   ├── index.html                ← 前端 UI：侧边栏 + 四栏对比
+│   ├── app.js                    ← SSE 客户端 + 交互 + 会话历史 + markdown 渲染
+│   ├── styles.css                ← 样式
+│   └── vendor/marked.min.js      ←   markdown 解析（GFM，本地化，不依赖 CDN）
 ├── scripts/
 │   ├── diagnose.js               ← 诊断：依赖/内核/profiles/端口检查
 │   └── e2e.js                    ← 端到端测试
