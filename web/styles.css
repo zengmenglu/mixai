@@ -162,14 +162,17 @@ button.ghost:hover { border-color: var(--accent); }
 }
 .pane-login[hidden] { display: none; }
 
-/* Per-pane stop button: shown only while this pane is busy. */
-.pane-stop { padding: 6px 12px; border-top: 1px solid var(--border); }
-.pane-stop[hidden] { display: none; }
-.pane-stop button {
-  width: 100%; background: var(--panel-2); color: var(--err);
-  border: 1px solid var(--err); border-radius: 8px; padding: 6px; font-size: 12px;
+/* Per-turn toolbar (stop / regenerate): small icons below each answer.
+   Independent per model - acting on one pane never affects the others. */
+.turn-tools { display: flex; gap: 8px; margin-top: 4px; }
+.turn-tools[hidden] { display: none; }
+.tool-btn {
+  background: var(--panel-2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 9px; font-size: 12px; cursor: pointer;
 }
-.pane-stop button:hover { background: var(--err); color: #fff; }
+.tool-btn[hidden] { display: none; }
+.tool-btn:hover { color: var(--text); border-color: var(--accent); }
 
 .composer {
   display: flex; gap: 10px; padding: 12px 16px;

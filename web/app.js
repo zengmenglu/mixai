@@ -147,6 +147,8 @@ function loadSession(id) {
       renderAnswer(p);
     }
   }
+  // After replaying turns, show the regenerate icon on each pane's last turn.
+  for (const p of panes.values()) refreshTools(p);
   renderSessionList();
 }
 
@@ -199,26 +201,13 @@ function makePane({ id, label }) {
   const transcript = el.querySelector('[data-transcript]');
   const status = el.querySelector('[data-status]');
   const loginWrap = el.querySelector('[data-login]');
-  // Per-pane ❌ stop button: shown only while this pane is busy. Terminates
-  // just this provider's answer so the others can answer the next question.
-  const stopWrap = document.createElement('div');
-  stopWrap.className = 'pane-stop';
-  stopWrap.hidden = true;
-  const stopBtn = document.createElement('button');
-  stopBtn.textContent = '✕ 终止回答';
-  stopBtn.title = '终止该模型的回答（不影响其他模型）';
-  stopBtn.addEventListener('click', () => {
-    fetch(`/api/stop/${id}`, { method: 'POST' });
-    setStatus(id, 'stopped'); // optimistic; server confirms via SSE 'stopped'
-    refreshSendState();
-  });
-  stopWrap.appendChild(stopBtn);
-  loginWrap.before(stopWrap);
   el.querySelector('[data-login-btn]').addEventListener('click', () => {
     fetch(`/api/login/${id}`, { method: 'POST' });
     setStatus(id, 'logged-out');
   });
-  panes.set(id, { el, transcript, status, loginWrap, stopWrap, state: 'idle', answerEl: null, rawText: '' });
+  // toolsEl/stopBtn/regenBtn point at the ACTIVE (last) turn's toolbar; built
+  // in startTurn. lastQuestion lets "重新回答" re-ask that turn's question.
+  panes.set(id, { el, transcript, status, loginWrap, state: 'idle', answerEl: null, rawText: '', lastQuestion: '', toolsEl: null, stopBtn: null, regenBtn: null });
   return el;
 }
 
@@ -290,12 +279,48 @@ function setStatus(id, status) {
   p.status.textContent = status;
   p.status.className = 'status ' + status;
   p.loginWrap.hidden = status !== 'logged-out';
-  // Stop button only while the pane is actively working.
-  p.stopWrap.hidden = !BUSY_STATES.has(status);
+  refreshTools(p);
+}
+
+/** Toggle the active turn's stop/regenerate icons by pane state. The stop icon
+ *  shows while streaming; the regenerate icon shows once the answer is done or
+ *  stopped. Both are per-pane and independent of other panes. */
+function refreshTools(p) {
+  if (!p.toolsEl) return;
+  const busy = BUSY_STATES.has(p.state);
+  p.stopBtn.hidden = !busy;
+  p.regenBtn.hidden = busy || !p.lastQuestion;
+}
+
+/** Re-ask this pane's last question and replace its answer. Independent of
+ *  other panes (reuses /api/ask with a single provider + its saved chat URL so
+ *  the provider recalls the conversation). Native regenerate buttons proved too
+ *  fragile to target, so we re-send the same question and swap the displayed
+ *  answer. */
+function regenerate(id) {
+  const p = panes.get(id);
+  if (!p || !p.answerEl || !p.lastQuestion) return;
+  if (BUSY_STATES.has(p.state)) { showToast('该模型正在回答中，请先停止'); return; }
+  // Clear the current answer and re-stream into the same turn (replace).
+  p.rawText = '';
+  renderAnswer(p);
+  setStatus(id, 'streaming');
+  refreshSendState();
+  const resumeUrls = {};
+  if (currentSession && currentSession.chatUrls && currentSession.chatUrls[id]) {
+    resumeUrls[id] = currentSession.chatUrls[id];
+  }
+  fetch('/api/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: p.lastQuestion, providers: [id], resumeUrls }),
+  });
 }
 
 // Append a new turn (question + empty answer) to a pane; returns the answer node.
 function startTurn(p, question) {
+  // Previous turn is now historical: hide its toolbar (only the active/last
+  // turn shows stop/regenerate).
+  if (p.toolsEl) p.toolsEl.hidden = true;
   const turn = document.createElement('div');
   turn.className = 'turn';
   const q = document.createElement('div');
@@ -303,10 +328,34 @@ function startTurn(p, question) {
   q.textContent = question;
   const a = document.createElement('div');
   a.className = 'turn-a';
-  turn.appendChild(q);
-  turn.appendChild(a);
+  // Per-turn toolbar: stop (streaming) + regenerate (done/stopped). Small icons,
+  // independent per model.
+  const tools = document.createElement('div');
+  tools.className = 'turn-tools';
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'tool-btn';
+  stopBtn.textContent = '⏹ 停止';
+  stopBtn.title = '终止该模型的回答（不影响其他模型）';
+  stopBtn.hidden = true;
+  stopBtn.addEventListener('click', () => {
+    fetch(`/api/stop/${p.el.dataset.id}`, { method: 'POST' });
+    setStatus(p.el.dataset.id, 'stopped');
+    refreshSendState();
+  });
+  const regenBtn = document.createElement('button');
+  regenBtn.className = 'tool-btn';
+  regenBtn.textContent = '↻ 重新回答';
+  regenBtn.title = '用同一问题重新生成该模型的回答（不影响其他模型）';
+  regenBtn.hidden = true;
+  regenBtn.addEventListener('click', () => regenerate(p.el.dataset.id));
+  tools.append(stopBtn, regenBtn);
+  turn.append(q, a, tools);
   p.transcript.appendChild(turn);
   p.transcript.scrollTop = p.transcript.scrollHeight;
+  p.toolsEl = tools;
+  p.stopBtn = stopBtn;
+  p.regenBtn = regenBtn;
+  p.lastQuestion = question;
   return a;
 }
 
@@ -415,7 +464,11 @@ function hideToast() {
 }
 
 function clearAll() {
-  for (const p of panes.values()) { p.transcript.innerHTML = ''; p.answerEl = null; p.rawText = ''; }
+  for (const p of panes.values()) {
+    p.transcript.innerHTML = '';
+    p.answerEl = null; p.rawText = ''; p.lastQuestion = '';
+    p.toolsEl = null; p.stopBtn = null; p.regenBtn = null;
+  }
   for (const id of panes.keys()) setStatus(id, 'idle');
   refreshSendState();
 }
