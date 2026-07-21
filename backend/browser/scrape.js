@@ -142,10 +142,13 @@ export async function* streamAnswer({
         try { streaming = await isStreaming(); } catch { streaming = false; }
       }
       const stable = stableFor >= stabilityWindowMs;
-      // In continue mode (baseline set) require actual new text before finishing,
-      // so we never return the stale previous answer. Fresh chats keep the 8s
-      // fallback for fast/empty responses.
-      const longEnough = sawAnyText || (!baseline && Date.now() - startedAt > 8000);
+      // Never finish on an empty answer: require actual text (sawAnyText) before
+      // declaring done. This avoids returning '' when a slow first turn (Kimi/
+      // ChatGPT hydration) hasn't rendered text within the stability window.
+      // maxMs is the only time-based cap; the 8s fallback is removed so we don't
+      // silently produce empty answers. In continue mode sawAnyText reflects NEW
+      // text (baseline is dropped before counting), so this also guards re-asks.
+      const longEnough = sawAnyText;
       if (stable && !streaming && longEnough) {
         log.info('answer stable, finishing', { fullLen: last.length, stableFor, preview: last.slice(0, 80) });
         yield { type: 'done', full: last };

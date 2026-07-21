@@ -8,7 +8,7 @@
 
 import { BaseAdapter } from './base.js';
 import {
-  firstVisible, lastVisible, anyExists, typeInto, clickFirst, pageTextMatches,
+  firstVisible, anyExists, typeInto, clickFirst, pageTextMatches,
 } from './util.js';
 
 const S = {
@@ -82,8 +82,25 @@ export class ChatGPTAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    const loc = await lastVisible(this.page, S.answer);
-    return loc ? (await loc.innerText().catch(() => '')) : '';
+    // Read the LAST assistant message's text directly in-page. lastVisible's
+    // isVisible() check is unreliable for ChatGPT's assistant containers (they
+    // can be present and on-screen yet fail the visibility heuristic), which
+    // produced empty answers. An evaluate() DOM pass is robust and also picks
+    // the newest turn for multi-turn chats.
+    return this.page.evaluate(() => {
+      const asst = [...document.querySelectorAll('div[data-message-author-role="assistant"]')];
+      for (let i = asst.length - 1; i >= 0; i--) {
+        const t = (asst[i].innerText || '').trim();
+        if (t) return t;
+      }
+      // fallback: last markdown container
+      const mds = [...document.querySelectorAll('div[class*="markdown"]')];
+      for (let i = mds.length - 1; i >= 0; i--) {
+        const t = (mds[i].innerText || '').trim();
+        if (t) return t;
+      }
+      return '';
+    }).catch(() => '');
   }
 
   async isStreaming() {
