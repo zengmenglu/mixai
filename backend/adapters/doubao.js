@@ -63,13 +63,21 @@ export class DoubaoAdapter extends BaseAdapter {
 
   async readLatestAnswerText() {
     // Robust read: take the last assistant bubble (data-message-id, not the
-    // right-aligned user bubble) that actually has text. Done in one DOM pass so
-    // we don't race a transiently-empty placeholder bubble.
+    // right-aligned user bubble) that actually has text. Doubao prepends a
+    // search-status line ("搜索 N 个关键词，参考 N 篇资料" / "找到 N 篇资料")
+    // to the answer bubble; strip those status lines so we read (and stream)
+    // only the real answer, and so completion isn't triggered by the status.
     return this.page.evaluate(() => {
       const msgs = [...document.querySelectorAll('div[data-message-id]')]
         .filter((e) => !/justify-end/.test(e.className || ''));
+      const statusRe = /^(正在搜索|搜索中|找到\s*[一二三四五六七八九十\d]+\s*篇资料|搜索\s*[一二三四五六七八九十\d]+\s*个关键词[^\n]*|参考\s*[一二三四五六七八九十\d]+\s*篇资料[^\n]*)$/;
       for (let i = msgs.length - 1; i >= 0; i--) {
-        const t = (msgs[i].innerText || '').trim();
+        let t = (msgs[i].innerText || '').trim();
+        if (!t) continue;
+        // Drop leading search-status lines (they sit atop the real answer).
+        const lines = t.split('\n');
+        while (lines.length && statusRe.test(lines[0].trim())) lines.shift();
+        t = lines.join('\n').trim();
         if (t) return t;
       }
       return '';

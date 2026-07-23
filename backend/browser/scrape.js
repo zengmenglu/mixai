@@ -96,6 +96,18 @@ export async function* streamAnswer({
       current = last; // transient DOM detach during re-render
     }
 
+    // Transient pre-answer states (Doubao "正在搜索/找到N篇资料/搜索N个关键词",
+    // Kimi "正在思考" etc.) are NOT the answer - they appear then get replaced
+    // or sit atop the real answer. While the page shows one of these as the
+    // (short) current text, never treat it as stable/done; keep the clock running.
+    // Only short status lines match, so this can't swallow a real answer.
+    const isTransient = current.length <= 60
+      && /正在搜索|搜索中|联网搜索|搜索\s*[一二三四五六七八九十\d]+\s*个|参考\s*[一二三四五六七八九十\d]+\s*篇|找到\s*[一二三四五六七八九十\d]+\s*篇|正在思考|思考中|正在生成|分析中/.test(current);
+    if (isTransient) {
+      lastGrowAt = Date.now(); // never finish while a transient state is showing
+      log.debug('transient state, waiting', { preview: current.slice(0, 40) });
+    }
+
     // Continue mode: hold off while the page still shows the previous answer.
     // Reset the stability clock so we never declare done on stale text; once the
     // read text diverges from the baseline, drop it and stream the new answer.

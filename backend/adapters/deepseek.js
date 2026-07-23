@@ -5,7 +5,7 @@
 
 import { BaseAdapter } from './base.js';
 import {
-  firstVisible, lastVisible, anyExists, typeInto, clickFirst, pageTextMatches,
+  firstVisible, anyExists, typeInto, clickFirst, pageTextMatches,
 } from './util.js';
 
 const S = {
@@ -72,8 +72,18 @@ export class DeepSeekAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    const loc = await lastVisible(this.page, S.answer);
-    return loc ? (await loc.innerText().catch(() => '')) : '';
+    // Read the last answer's text with citation spans removed. DeepSeek renders
+    // citations as <span class="ds-markdown-cite">-\n1</span>; innerText
+    // linearizes them into "-\n1\n-\n2" noise that breaks markdown rendering.
+    // Clone the node, strip citations, then read text - the live DOM is untouched.
+    return this.page.evaluate((sel) => {
+      const locs = [...document.querySelectorAll(sel)];
+      const last = locs[locs.length - 1];
+      if (!last) return '';
+      const clone = last.cloneNode(true);
+      clone.querySelectorAll('.ds-markdown-cite, sup, [class*="cite"]').forEach((e) => e.remove());
+      return (clone.innerText || '').trim();
+    }, S.answer[0]).catch(() => '');
   }
 
   async isStreaming() {
