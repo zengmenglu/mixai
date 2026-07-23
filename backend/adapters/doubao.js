@@ -84,6 +84,30 @@ export class DoubaoAdapter extends BaseAdapter {
     }).catch(() => '');
   }
 
+  /** Latest answer bubble's HTML. Doubao renders the answer as multiple
+   *  [data-render-engine] blocks inside the last div[data-message-id]: the
+   *  first is a short search-status line ("搜索N个关键词..."), the rest are the
+   *  real answer content. Take the LAST block with real text (>20 chars, to
+   *  skip the status line) - that's the current/latest answer chunk. Fall back
+   *  to the bubble if no engine block matches. */
+  async readLatestAnswerHtml() {
+    return this.page.evaluate(() => {
+      const msgs = [...document.querySelectorAll('div[data-message-id]')]
+        .filter((e) => !/justify-end/.test(e.className || ''));
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (!(m.innerText || '').trim()) continue;
+        const engines = [...m.querySelectorAll('[data-render-engine]')];
+        // pick last engine block with substantial text (skip status line)
+        for (let j = engines.length - 1; j >= 0; j--) {
+          if ((engines[j].innerText || '').trim().length > 20) return engines[j].innerHTML || '';
+        }
+        return m.innerHTML || '';
+      }
+      return '';
+    }).catch(() => '');
+  }
+
   async isStreaming() {
     return !!(await firstVisible(this.page, S.stopButton));
   }

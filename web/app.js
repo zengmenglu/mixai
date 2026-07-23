@@ -25,20 +25,25 @@ function anyBusy() {
   return false;
 }
 
-// ---- Markdown rendering --------------------------------------------------
-// Answers stream as plain text but often contain markdown (tables, code, lists).
-// Render to HTML via marked (GFM) and strip unsafe nodes so AI output can't run
-// scripts. Re-rendered on each delta; a table snaps into place once complete.
-marked.setOptions({ gfm: true, breaks: true });
+// ---- Answer rendering --------------------------------------------------
+// Providers return their answer as native HTML (with <p>/<ul>/<strong>/<a>/
+// <table> etc.), so we render it directly - this keeps each platform's native
+// formatting (paragraphs, lists, bold, links, tables, numbered items). We
+// sanitize (strip scripts/on*/javascript:) so AI output can't run scripts.
+// Deltas carry the FULL current HTML each time (a "replace"), so the bubble
+// always shows the latest complete markup - no mid-tag slicing.
 
-/** Strip scripts/iframes/on* handlers/javascript: URLs from an HTML fragment. */
+/** Strip scripts/iframes/on* handlers/javascript: URLs from an HTML fragment,
+ *  return a safe DocumentFragment. */
 function sanitizeHtml(html) {
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
-  tpl.content.querySelectorAll('script, iframe, object, embed').forEach((el) => el.remove());
+  tpl.content.querySelectorAll('script, iframe, object, embed, link, style, meta').forEach((el) => el.remove());
   tpl.content.querySelectorAll('*').forEach((el) => {
     [...el.attributes].forEach((attr) => {
-      if (attr.name.startsWith('on') || attr.value.toLowerCase().includes('javascript:')) {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.toLowerCase();
+      if (name.startsWith('on') || val.includes('javascript:') || name === 'style') {
         el.removeAttribute(attr.name);
       }
     });
@@ -46,11 +51,11 @@ function sanitizeHtml(html) {
   return tpl.content;
 }
 
-/** Render the pane's accumulated raw markdown into its answer bubble. */
+/** Render the pane's accumulated answer HTML into its bubble. */
 function renderAnswer(p) {
   if (!p.answerEl) return;
   p.answerEl.innerHTML = '';
-  p.answerEl.appendChild(sanitizeHtml(marked.parse(p.rawText || '')));
+  p.answerEl.appendChild(sanitizeHtml(p.rawHtml || ''));
   p.transcript.scrollTop = p.transcript.scrollHeight;
 }
 
@@ -143,7 +148,7 @@ function loadSession(id) {
     for (const pid of panes.keys()) {
       const p = panes.get(pid);
       p.answerEl = startTurn(p, turn.question);
-      p.rawText = (turn.answers && turn.answers[pid]) || '';
+      p.rawHtml = (turn.answers && turn.answers[pid]) || '';
       renderAnswer(p);
     }
   }
@@ -207,7 +212,7 @@ function makePane({ id, label }) {
   });
   // toolsEl/stopBtn/regenBtn point at the ACTIVE (last) turn's toolbar; built
   // in startTurn. lastQuestion lets "重新回答" re-ask that turn's question.
-  panes.set(id, { el, transcript, status, loginWrap, state: 'idle', answerEl: null, rawText: '', lastQuestion: '', toolsEl: null, stopBtn: null, regenBtn: null });
+  panes.set(id, { el, transcript, status, loginWrap, state: 'idle', answerEl: null, rawHtml: '', lastQuestion: '', toolsEl: null, stopBtn: null, regenBtn: null });
   return el;
 }
 
@@ -302,7 +307,7 @@ function regenerate(id) {
   if (!p || !p.answerEl || !p.lastQuestion) return;
   if (BUSY_STATES.has(p.state)) { showToast('该模型正在回答中，请先停止'); return; }
   // Clear the current answer and re-stream into the same turn (replace).
-  p.rawText = '';
+  p.rawHtml = '';
   renderAnswer(p);
   setStatus(id, 'streaming');
   refreshSendState();
@@ -391,42 +396,36 @@ function handleEvent(ev) {
   if (!p) return;
 
   if (ev.type === 'delta') {
-    if (!p.answerEl) return;
-    p.rawText += ev.text;
+    if (!p.answerEl || !ev.html) return;
+    // Delta carries the FULL current HTML (replace semantics): each provider's
+    // answer grows in place, so the latest HTML supersedes the previous.
+    p.rawHtml = ev.html;
     renderAnswer(p);
   } else if (ev.type === 'status') {
-    // On done, resync to the authoritative full text - but only on a clean
-    // superset. Two cases are safe: nothing streamed yet (a slow provider whose
-    // answer arrived in one late burst) or full extends what we already have
-    // (missed tail deltas). If full DIVERGES from what we streamed, trust the
-    // stream: a diverging full usually means the provider's done-time DOM
-    // contains the answer twice, and replacing would print it a second time.
+    // On done, resync to the authoritative full HTML. Since deltas are
+    // full-replace, the done HTML is the complete final markup; use it
+    // unconditionally (it's the source of truth from the provider's DOM).
     if (ev.status === 'done' && p.answerEl && typeof ev.full === 'string') {
-      const streamed = p.rawText || '';
-      if (streamed.length === 0
-          || (ev.full.startsWith(streamed) && ev.full.length > streamed.length)) {
-        p.rawText = ev.full;
-        renderAnswer(p);
-      }
-      // Persist the final answer + conversation URL (for true resume later).
-      persistAnswer(ev.pane, p.rawText);
+      p.rawHtml = ev.full;
+      renderAnswer(p);
+      persistAnswer(ev.pane, p.rawHtml);
       persistChatUrl(ev.pane, ev.url);
     }
     if (ev.status === 'stopped' && p.answerEl) {
-      persistAnswer(ev.pane, p.rawText);
+      persistAnswer(ev.pane, p.rawHtml);
     }
     if (ev.status === 'error' && p.answerEl) {
       // Append the error to whatever streamed so partial work isn't lost.
-      p.rawText = (p.rawText || '') + `\n\n> ⚠️ 出错：${ev.message || '未知错误'}`;
+      p.rawHtml = (p.rawHtml || '') + `<p><em>⚠️ 出错：${(ev.message || '未知错误').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</em></p>`;
       renderAnswer(p);
-      persistAnswer(ev.pane, p.rawText);
+      persistAnswer(ev.pane, p.rawHtml);
     }
     // Remove empty answer bubble when a provider is not logged in, so no blank
     // bubble lingers in the transcript.
     if (ev.status === 'logged-out' && p.answerEl) {
       p.answerEl.closest('.turn')?.remove();
       p.answerEl = null;
-      p.rawText = '';
+      p.rawHtml = '';
     }
     setStatus(ev.pane, ev.status);
     refreshSendState();
@@ -466,7 +465,7 @@ function hideToast() {
 function clearAll() {
   for (const p of panes.values()) {
     p.transcript.innerHTML = '';
-    p.answerEl = null; p.rawText = ''; p.lastQuestion = '';
+    p.answerEl = null; p.rawHtml = ''; p.lastQuestion = '';
     p.toolsEl = null; p.stopBtn = null; p.regenBtn = null;
   }
   for (const id of panes.keys()) setStatus(id, 'idle');
@@ -494,7 +493,7 @@ form.addEventListener('submit', async (e) => {
   for (const id of selected) {
     const p = panes.get(id);
     p.answerEl = startTurn(p, question);
-    p.rawText = '';
+    p.rawHtml = '';
     setStatus(id, 'pending');
   }
   refreshSendState();

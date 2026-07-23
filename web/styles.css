@@ -123,7 +123,7 @@ button.ghost:hover { border-color: var(--accent); }
   font-size: 14px; line-height: 1.6;
 }
 .turn-a:empty::before { content: "▍"; color: var(--muted); }
-/* Rendered markdown (marked.js output). */
+/* Provider answer HTML (native p/ul/h/table from each platform). */
 .turn-a p { margin: 0 0 8px; }
 .turn-a p:last-child { margin-bottom: 0; }
 .turn-a h1, .turn-a h2, .turn-a h3, .turn-a h4 { margin: 12px 0 6px; line-height: 1.3; }

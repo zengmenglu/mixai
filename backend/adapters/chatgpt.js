@@ -103,6 +103,23 @@ export class ChatGPTAdapter extends BaseAdapter {
     }).catch(() => '');
   }
 
+  /** Latest assistant message's HTML (the .markdown content of the last
+   *  data-message-author-role="assistant" turn). */
+  async readLatestAnswerHtml() {
+    return this.page.evaluate(() => {
+      const asst = [...document.querySelectorAll('div[data-message-author-role="assistant"]')];
+      for (let i = asst.length - 1; i >= 0; i--) {
+        const md = asst[i].querySelector('.markdown, div[class*="markdown"]');
+        if (md && md.innerHTML) return md.innerHTML;
+      }
+      const mds = [...document.querySelectorAll('div[class*="markdown"]')];
+      for (let i = mds.length - 1; i >= 0; i--) {
+        if (mds[i].innerHTML) return mds[i].innerHTML;
+      }
+      return '';
+    }).catch(() => '');
+  }
+
   async isStreaming() {
     return !!(await firstVisible(this.page, S.stopButton));
   }

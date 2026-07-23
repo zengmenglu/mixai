@@ -72,10 +72,8 @@ export class DeepSeekAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    // Read the last answer's text with citation spans removed. DeepSeek renders
-    // citations as <span class="ds-markdown-cite">-\n1</span>; innerText
-    // linearizes them into "-\n1\n-\n2" noise that breaks markdown rendering.
-    // Clone the node, strip citations, then read text - the live DOM is untouched.
+    // Text read (for stability/baseline detection) - strips citation spans so
+    // they don't pollute the text. Keep cheap; the streamed payload is HTML.
     return this.page.evaluate((sel) => {
       const locs = [...document.querySelectorAll(sel)];
       const last = locs[locs.length - 1];
@@ -83,6 +81,18 @@ export class DeepSeekAdapter extends BaseAdapter {
       const clone = last.cloneNode(true);
       clone.querySelectorAll('.ds-markdown-cite, sup, [class*="cite"]').forEach((e) => e.remove());
       return (clone.innerText || '').trim();
+    }, S.answer[0]).catch(() => '');
+  }
+
+  /** Latest answer's HTML, citation spans removed (they render as "-\n1" noise). */
+  async readLatestAnswerHtml() {
+    return this.page.evaluate((sel) => {
+      const locs = [...document.querySelectorAll(sel)];
+      const last = locs[locs.length - 1];
+      if (!last) return '';
+      const clone = last.cloneNode(true);
+      clone.querySelectorAll('.ds-markdown-cite, sup, [class*="cite"]').forEach((e) => e.remove());
+      return clone.innerHTML || '';
     }, S.answer[0]).catch(() => '');
   }
 

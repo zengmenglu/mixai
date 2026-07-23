@@ -1,22 +1,26 @@
 // Generic streaming scraper + completion detector.
 //
-// Strategy (per design.md): the primary completion signal is text-stability —
-// the response container's text stops growing for `stabilityWindowMs`.
-// Adapters may optionally provide a `isStreaming(page)` corroborating signal
-// (e.g. a stop button is visible / a streaming cursor exists). When present we
-// require BOTH "text stable" AND "not streaming" so a mid-generation stall is
-// never mistaken for completion.
+// Strategy: the primary completion signal is text-stability - the response
+// container's TEXT stops growing for `stabilityWindowMs`. We read text (cheap,
+// stable) to detect growth and completion, but we deliver HTML (the provider's
+// rendered answer with <p>/<ul>/<strong>/<a> intact) so the UI shows native
+// formatting. Each time the text grows we emit the full current HTML as a
+// "replace" delta (slicing HTML mid-tag is unreliable, so the UI always swaps
+// in the latest complete HTML). Adapters may provide an isStreaming(page)
+// corroborating signal; when present we require BOTH "text stable" AND "not
+// streaming" so a mid-generation stall is never mistaken for completion.
 
 import { plog } from '../log.js';
 
 const POLL_MS = 150;
 
 /**
- * Stream incremental answer text from a response container.
+ * Stream the answer as HTML, using text-stability for completion.
  *
  * @param {object} opts
  * @param {import('playwright').Page} opts.page
- * @param {() => Promise<string>} opts.readText  reads current full answer text
+ * @param {() => Promise<string>} opts.readText  reads current full answer text (for stability/baseline)
+ * @param {() => Promise<string>} opts.readHtml  reads current full answer HTML (the payload we stream)
  * @param {() => Promise<boolean>} [opts.isStreaming]  optional "still generating" signal
  * @param {number} opts.stabilityWindowMs
  * @param {number} [opts.maxMs] hard cap to avoid hanging forever
@@ -25,11 +29,13 @@ const POLL_MS = 150;
  * @param {string} [opts.baseline] text of the PREVIOUS answer still on the page
  *   (continue mode); the stream waits for new text that diverges from it so we
  *   never re-stream the old answer. Empty/omitted for a fresh chat.
- * @returns {AsyncGenerator<{type:'delta', text:string} | {type:'done', full:string}>}
+ * @returns {AsyncGenerator<{type:'delta', html:string} | {type:'done', full:string}>}
+ *   `full` on done is the final HTML.
  */
 export async function* streamAnswer({
   page,
   readText,
+  readHtml,
   isStreaming,
   stabilityWindowMs,
   maxMs = 180000,
@@ -38,113 +44,107 @@ export async function* streamAnswer({
   baseline = '',
 }) {
   const log = plog(tag);
-  let last = '';
+  // `lastText` tracks the text for stability/growth; `lastHtml` is the last
+  // HTML we streamed (so done-time `full` is HTML, not text).
+  let lastText = '';
+  let lastHtml = '';
   let lastGrowAt = Date.now();
   const startedAt = Date.now();
 
-  // Small grace period so we don't declare "done" before generation even starts.
   let sawAnyText = false;
-  // Consecutive readText failures: if the selector breaks mid-stream we fast-fail
-  // instead of spinning until maxMs.
   let consecutiveFailures = 0;
   const MAX_CONSECUTIVE_FAILURES = 20;
-  // Minimum length for the DOM-echo guard: only suppress a delta when the prior
-  // text is long enough that an exact self-repetition is implausibly a real
-  // answer (avoids truncating short legitimate repetitions like "是。是。").
   const ECHO_MIN_LEN = 10;
-  // Continue mode: the page still shows the PREVIOUS answer. Don't stream it
-  // again - wait until readText diverges from the baseline (the new answer
-  // appears), then stream from scratch. baseline='' (fresh chat) drops immediately.
   let baselineDropped = !baseline;
 
   while (true) {
     // Stop button: abort returns promptly (within one poll) without yielding a
     // done event - the orchestrator emits 'stopped' from the outside.
     if (signal?.aborted) {
-      log.info('aborted, stopping stream', { fullLen: last.length });
+      log.info('aborted, stopping stream', { fullLen: lastHtml.length });
       return;
     }
     // User closed the window mid-stream: finish gracefully with the partial
-    // text instead of throwing "Target page ... has been closed". The next
-    // turn's launch() re-opens a fresh browser, so no error surfaces.
+    // HTML instead of throwing "Target page ... has been closed".
     if (page.isClosed()) {
-      log.warn('page closed mid-stream, finishing partial', { fullLen: last.length });
-      yield { type: 'done', full: last };
+      log.warn('page closed mid-stream, finishing partial', { fullLen: lastHtml.length });
+      yield { type: 'done', full: lastHtml };
       return;
     }
     try {
       await page.waitForTimeout(POLL_MS);
     } catch {
-      log.warn('page closed during wait, finishing partial', { fullLen: last.length });
-      yield { type: 'done', full: last };
+      log.warn('page closed during wait, finishing partial', { fullLen: lastHtml.length });
+      yield { type: 'done', full: lastHtml };
       return;
     }
 
     let current = '';
     try {
       current = (await readText()) || '';
-      consecutiveFailures = 0; // reset on success
+      consecutiveFailures = 0;
     } catch {
       consecutiveFailures++;
-      // If the selector worked before (we've seen text) but now fails
-      // repeatedly, it may have been removed from the DOM. Fast-fail.
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && sawAnyText) {
         log.warn('readText failing repeatedly, fast-finishing', { failures: consecutiveFailures });
-        yield { type: 'done', full: last };
+        yield { type: 'done', full: lastHtml };
         return;
       }
-      current = last; // transient DOM detach during re-render
+      current = lastText; // transient DOM detach during re-render
     }
 
-    // Transient pre-answer states (Doubao "正在搜索/找到N篇资料/搜索N个关键词",
-    // Kimi "正在思考" etc.) are NOT the answer - they appear then get replaced
-    // or sit atop the real answer. While the page shows one of these as the
-    // (short) current text, never treat it as stable/done; keep the clock running.
-    // Only short status lines match, so this can't swallow a real answer.
+    // Transient pre-answer states (Doubao "正在搜索/找到N篇资料", Kimi "正在思考"
+    // etc.) are NOT the answer. While the page shows one of these as the (short)
+    // current text, never treat it as stable/done; keep the clock running.
     const isTransient = current.length <= 60
       && /正在搜索|搜索中|联网搜索|搜索\s*[一二三四五六七八九十\d]+\s*个|参考\s*[一二三四五六七八九十\d]+\s*篇|找到\s*[一二三四五六七八九十\d]+\s*篇|正在思考|思考中|正在生成|分析中/.test(current);
     if (isTransient) {
-      lastGrowAt = Date.now(); // never finish while a transient state is showing
+      lastGrowAt = Date.now();
       log.debug('transient state, waiting', { preview: current.slice(0, 40) });
     }
 
     // Continue mode: hold off while the page still shows the previous answer.
-    // Reset the stability clock so we never declare done on stale text; once the
-    // read text diverges from the baseline, drop it and stream the new answer.
     if (!baselineDropped) {
       if (current !== baseline) {
         baselineDropped = true;
-        last = '';
+        lastText = '';
+        lastHtml = '';
         lastGrowAt = Date.now();
       } else {
         lastGrowAt = Date.now();
-        current = last; // no growth to evaluate below
+        current = lastText; // no growth to evaluate below
       }
     }
 
     if (baselineDropped) {
-      if (current.length > last.length) {
-        // Safety net for provider DOM echo: if the container duplicated its
-        // content (current is exactly last repeated), streaming the slice would
-        // print the whole answer a second time. Skip and warn.
-        const isEcho = last.length >= ECHO_MIN_LEN && current === last + last;
+      if (current.length > lastText.length) {
+        // DOM-echo guard: a container that doubled its content would stream the
+        // whole answer twice. Skip and warn (text-based check).
+        const isEcho = lastText.length >= ECHO_MIN_LEN && current === lastText + lastText;
         if (isEcho) {
-          log.warn('detected DOM echo, skipping duplicate', { lastLen: last.length });
+          log.warn('detected DOM echo, skipping duplicate', { lastLen: lastText.length });
         } else {
-          const delta = current.slice(last.length);
-          log.debug('delta', { lastLen: last.length, curLen: current.length, deltaLen: delta.length });
-          last = current;
+          lastText = current;
           lastGrowAt = Date.now();
           sawAnyText = sawAnyText || current.trim().length > 0;
-          yield { type: 'delta', text: delta };
+          // Stream the full current HTML as a "replace" delta. Slicing HTML
+          // mid-tag is unreliable, so the UI always swaps in the latest
+          // complete HTML - simpler and never produces broken markup.
+          const html = (await readHtml().catch(() => '')) || '';
+          if (html && html !== lastHtml) {
+            lastHtml = html;
+            log.debug('delta (html replace)', { textLen: current.length, htmlLen: html.length });
+            yield { type: 'delta', html };
+          }
         }
-      } else if (current !== last && current.length > 0) {
-        // Container re-rendered/replaced (length not strictly increasing).
-        if (!current.startsWith(last)) {
-          log.debug('container re-rendered, text diverged', { lastLen: last.length, curLen: current.length });
-          last = current;
+      } else if (current !== lastText && current.length > 0) {
+        // Container re-rendered/replaced (text not strictly increasing).
+        if (!current.startsWith(lastText)) {
+          log.debug('container re-rendered, text diverged', { lastLen: lastText.length, curLen: current.length });
+          lastText = current;
           lastGrowAt = Date.now();
-          yield { type: 'delta', text: '' };
+          const html = (await readHtml().catch(() => '')) || '';
+          if (html && html !== lastHtml) { lastHtml = html; yield { type: 'delta', html }; }
         }
       }
 
@@ -154,23 +154,23 @@ export async function* streamAnswer({
         try { streaming = await isStreaming(); } catch { streaming = false; }
       }
       const stable = stableFor >= stabilityWindowMs;
-      // Never finish on an empty answer: require actual text (sawAnyText) before
-      // declaring done. This avoids returning '' when a slow first turn (Kimi/
-      // ChatGPT hydration) hasn't rendered text within the stability window.
-      // maxMs is the only time-based cap; the 8s fallback is removed so we don't
-      // silently produce empty answers. In continue mode sawAnyText reflects NEW
-      // text (baseline is dropped before counting), so this also guards re-asks.
+      // Never finish on an empty answer: require actual text before declaring
+      // done. maxMs is the only time-based cap.
       const longEnough = sawAnyText;
       if (stable && !streaming && longEnough) {
-        log.info('answer stable, finishing', { fullLen: last.length, stableFor, preview: last.slice(0, 80) });
-        yield { type: 'done', full: last };
+        // Final read to capture the complete HTML at done time.
+        const finalHtml = (await readHtml().catch(() => lastHtml)) || lastHtml;
+        lastHtml = finalHtml;
+        log.info('answer stable, finishing', { fullLen: finalHtml.length, textLen: lastText.length, stableFor });
+        yield { type: 'done', full: finalHtml };
         return;
       }
     }
 
     if (Date.now() - startedAt > maxMs) {
-      log.warn('max wait exceeded, finishing', { fullLen: last.length, elapsedMs: Date.now() - startedAt });
-      yield { type: 'done', full: last };
+      const finalHtml = (await readHtml().catch(() => lastHtml)) || lastHtml;
+      log.warn('max wait exceeded, finishing', { fullLen: finalHtml.length, elapsedMs: Date.now() - startedAt });
+      yield { type: 'done', full: finalHtml };
       return;
     }
   }

@@ -33,9 +33,8 @@ mixai/
 │       └── scrape.js             ←   流式抓取 + 完成判定 + baseline + DOM-echo 拦截
 ├── web/
 │   ├── index.html                ← 前端 UI：侧边栏 + 四栏对比
-│   ├── app.js                    ← SSE 客户端 + 交互 + 会话历史 + markdown 渲染
-│   ├── styles.css                ← 样式
-│   └── vendor/marked.min.js      ←   markdown 解析（GFM，本地化，不依赖 CDN）
+│   ├── app.js                    ← SSE 客户端 + 交互 + 会话历史 + 原生 HTML 渲染
+│   └── styles.css                ← 样式
 ├── scripts/
 │   ├── diagnose.js               ← 诊断：依赖/内核/profiles/端口检查
 │   └── e2e.js                    ← 端到端测试

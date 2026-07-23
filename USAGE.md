@@ -155,7 +155,7 @@ npm start
 | **查看/恢复历史会话** | 左侧栏列出过往会话，点击即加载往期 Q&A；在其上继续追问会自动恢复 AI 的原对话上下文（真正续接） |
 | **开新会话** | 左侧栏顶部「＋ 新会话」清空当前栏，下轮各开新对话 |
 | **重新登录某栏** | 该栏显示 `logged-out` 时，点栏内「打开登录窗口」 |
-| **markdown 渲染** | 回答自动渲染表格/代码块/列表/粗体等；流式逐字渲染，表格完成后自动成型 |
+| **回答格式** | 回答按各平台原生格式渲染（分段、列表、加粗、链接、编号、表格），与原页面基本一致 |
 
 ### 停止 / 重新回答（每模型独立）
 
@@ -335,10 +335,9 @@ backend/
   login.js                 ← 登录/恢复流程
   browser/contextFactory.js ← 浏览器启动 + stealth + 自愈重连
   browser/scrape.js        ← 流式抓取 + 完成判定 + baseline + 重复拦截
-  adapters/<provider>.js   ← 每家一个：选择器表 S + 交互
+  adapters/<provider>.js   ← 每家一个：选择器表 S + 交互 + readLatestAnswerHtml
 web/
-  index.html app.js styles.css ← 前端：侧边栏 + 四栏 + SSE
-  vendor/marked.min.js     ← markdown 渲染（表格/代码/列表）
+  index.html app.js styles.css ← 前端：侧边栏 + 四栏 + SSE + 原生 HTML 渲染
 scripts/diagnose.js        ← 诊断脚本
 profiles/<provider>/       ← 浏览器持久会话（gitignore，不提交）
 ```

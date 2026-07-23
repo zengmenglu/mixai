@@ -3,7 +3,7 @@
 
 import { BaseAdapter } from './base.js';
 import {
-  firstVisible, lastVisible, anyExists, typeInto, clickFirst, pageTextMatches,
+  firstVisible, anyExists, typeInto, clickFirst, pageTextMatches,
 } from './util.js';
 
 const S = {
@@ -63,8 +63,27 @@ export class KimiAdapter extends BaseAdapter {
   }
 
   async readLatestAnswerText() {
-    const loc = await lastVisible(this.page, S.answer);
-    return loc ? (await loc.innerText().catch(() => '')) : '';
+    // Take the last .markdown container with text. Kimi emits a "thinking"/
+    // search segment then the answer; .markdown holds the rendered answer.
+    return this.page.evaluate(() => {
+      const mds = [...document.querySelectorAll('.segment-assistant .markdown, .markdown')];
+      for (let i = mds.length - 1; i >= 0; i--) {
+        const t = (mds[i].innerText || '').trim();
+        if (t) return t;
+      }
+      return '';
+    }).catch(() => '');
+  }
+
+  /** Latest answer's HTML - the last .markdown container with text. */
+  async readLatestAnswerHtml() {
+    return this.page.evaluate(() => {
+      const mds = [...document.querySelectorAll('.segment-assistant .markdown, .markdown')];
+      for (let i = mds.length - 1; i >= 0; i--) {
+        if ((mds[i].innerText || '').trim()) return mds[i].innerHTML || '';
+      }
+      return '';
+    }).catch(() => '');
   }
 
   async isStreaming() {

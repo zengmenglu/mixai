@@ -119,6 +119,15 @@ export class BaseAdapter {
     throw new Error(`${this.id}: readLatestAnswerText() not implemented`);
   }
 
+  /** Reads the latest answer's innerHTML (provider-rendered, with <p>/<ul>/
+   *  <strong>/<a> etc. intact). The frontend renders this directly so the
+   *  answer keeps its native formatting (paragraphs, lists, bold, links,
+   *  tables) instead of a flattened text version. Subclasses MUST implement.
+   *  @returns {Promise<string>} HTML string ('' if no answer yet) */
+  async readLatestAnswerHtml() {
+    throw new Error(`${this.id}: readLatestAnswerHtml() not implemented`);
+  }
+
   /** Optional corroborating "still generating" signal. @returns {Promise<boolean>} */
   async isStreaming() {
     return false;
@@ -178,6 +187,7 @@ export class BaseAdapter {
     const stream = streamAnswer({
       page: this.page,
       readText: () => this.readLatestAnswerText(),
+      readHtml: () => this.readLatestAnswerHtml(),
       isStreaming: () => this.isStreaming(),
       stabilityWindowMs: this.cfg.stabilityWindowMs,
       tag: this.id,
@@ -191,10 +201,10 @@ export class BaseAdapter {
     let totalChars = 0;
     for await (const ev of stream) {
       if (ev.type === 'delta') {
-        if (ev.text) {
+        if (ev.html) {
           deltaCount++;
-          totalChars += ev.text.length;
-          yield { type: 'delta', text: ev.text };
+          totalChars += ev.html.length;
+          yield { type: 'delta', html: ev.html };
         }
         // mid-stream quota wall can appear after generation starts
       } else if (ev.type === 'done') {

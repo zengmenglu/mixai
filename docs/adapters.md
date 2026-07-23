@@ -27,6 +27,7 @@
 - **`ask(question, mode, signal)`**：未登录时 reload 一次重试；流式前捕获 `baseline`（上一轮回答文本）传给 `streamAnswer`，避免把旧答案当新答案流式输出；`done` 事件携带当前 `page.url()` 供会话恢复使用。`signal`（AbortSignal）用于终止。
 - **`stopGenerating()`**：点击 provider 自己的停止按钮，释放输入框供下一轮使用（终止按钮触发）。各 adapter 覆盖此方法。
 - **完成判定**：由 [scrape.js](file://backend/browser/scrape.js) 的 `streamAnswer` 实现——文本稳定窗口 + `isStreaming` 佐证；续问时用 baseline 跳过旧答案；DOM echo（回答被渲染两份）自动拦截。
+- **`readLatestAnswerText()` / `readLatestAnswerHtml()`**：各 adapter 实现。text 用于稳定性/续问 baseline 检测，HTML 是流式载荷（保留原生格式，与原页面一致）。多轮时都取**最新**回答容器。
 
 ### 配置关联
 
